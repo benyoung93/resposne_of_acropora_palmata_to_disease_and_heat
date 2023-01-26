@@ -1,0 +1,797 @@
+---
+title: "DHE_relative_risk"
+author: "Benjamin Young"
+date: "17/03/2021"
+output: html_document
+---
+
+```{r package loading, include = F}
+library(tidyverse)
+library(runjags)
+library(rjags)
+library(R2jags)
+library(ggmcmc)
+library(MCMCvis)
+library(coda)
+library(pairwiseCI)
+library(gmodels)
+```
+
+```{r Data read in and prep, include = F}
+read.csv("~/Documents/projects/DHE/manuscript/metadata/hdl.csv") %>%
+  mutate(
+    TIME = factor(
+      .$Time_after_disease_exposure,
+      c(
+        "pre_exposure",
+        "day_1",
+        "day_2",
+        "day_3",
+        "day_4",
+        "day_5",
+        "day_6",
+        "day_7",
+        "day_8",
+        "day_9",
+        "day_10"
+      )
+    ),
+    HEALTH = factor(.$HEALTH, c("healthy", "diseased", "dead"))
+  ) %>% 
+  na.omit() -> hdl
+
+str(hdl)
+#View(hdl)
+```
+
+```{r Remvoing pre exposure diseased}
+hdl %>% 
+  filter(TIME %in% c("pre_exposure"), 
+         HEALTH %in% c("diseased", "dead")) %>% 
+  column_to_rownames(var = "Frag_number") %>% 
+  rownames() -> frag_num_filt
+
+hdl %>% filter(!Frag_number %in% frag_num_filt) -> HDL
+```
+
+
+## Serratia and Disease Slurry RR Split by Ambient and Heat
+
+```{r Serratia Ambient and Heat results}
+HDL %>%
+  dplyr::filter(D_treatment %in% c("s_m_placebo", "s_marcscens"), 
+                TIME %in% c("day_10")) %>%
+  dplyr::select(D_treatment, Tank_treatment, Genotype, TIME, HEALTH) %>%
+  mutate(END_STATUS = case_when(
+    HEALTH == "diseased" ~ "DISEASED", 
+    HEALTH == "dead" ~ "DISEASED", 
+    HEALTH == "healthy" ~ "HEALTHY"
+  )) %>%
+  group_by(D_treatment, Tank_treatment, Genotype, END_STATUS) %>% 
+  dplyr::summarise(count = n()) %>% 
+  ungroup() %>%
+  complete(D_treatment, Tank_treatment, Genotype, END_STATUS, fill = list(count = 0)) -> ser_all
+
+ser_all %>% 
+  filter(Tank_treatment %in% c("ambient")) -> ser_ambient
+
+ser_all %>% 
+  filter(Tank_treatment %in% c("heat")) -> ser_heat
+
+ser_ambient
+ser_heat
+```
+
+```{r Disease slurry for ambient and heat}
+HDL %>%
+  dplyr::filter(D_treatment %in% c("disease_slurry", "placebo_slurry"), 
+                TIME %in% c("day_10")) %>%
+  dplyr::select(D_treatment, Tank_treatment, Genotype, TIME, HEALTH) %>%
+  mutate(END_STATUS = case_when(
+    HEALTH == "diseased" ~ "DISEASED", 
+    HEALTH == "dead" ~ "DISEASED", 
+    HEALTH == "healthy" ~ "HEALTHY"
+  )) %>%
+  group_by(D_treatment, Tank_treatment, Genotype, END_STATUS) %>% 
+  dplyr::summarise(count = n()) %>% 
+  ungroup() %>%
+  complete(D_treatment, Tank_treatment, Genotype, END_STATUS, fill = list(count = 0)) -> slurry_all
+
+slurry_all %>% 
+  filter(Tank_treatment %in% c("ambient")) -> slurry_ambient
+
+slurry_all %>% 
+  filter(Tank_treatment %in% c("heat")) -> slurry_heat
+
+slurry_ambient
+slurry_heat
+```
+
+```{r OpenJags model}
+write("model{
+  for (i in 1:k) {
+    #Prior
+    a[i] ~ dbeta(1,1)
+    c[i] ~ dbeta(1,1)
+    
+    # Likelihood
+    h[i] ~ dbin(a[i],r[i])
+    l[i] ~ dbin(c[i],m[i])
+    RRISK[i] <- a[i]/c[i]
+    OR[i] <- (a[i]/(1-a[i]))/(c[i]/(1-c[i]))
+    lnOR[i] <- log(OR[i])
+    ppos[i] <- step(OR[i]-1)
+  }
+}
+",file="~/Documents/projects/DHE/manuscript/relative_risk/dhe_rr.txt")
+```
+
+h = total number ofexperimental corals with disease
+r = total number of experimental corals
+l = total number control corals with disease
+m = total number of control corals
+
+I think the best way to visualise this the ambient treatment and then then the heat treatments. 
+
+```{r Making ambient and heat for Jags}
+ambient <- list(k=8, 
+                h = c(4,2,3,4,1,0,0,0), 
+                r = c(5,5,4,5,5,5,5,5), 
+                l = c(1,0,1,0,0,1,0,1), 
+                m = c(5,5,5,5,5,5,5,5))
+
+heat <- list(k=8, 
+             h = c(5,4,3,5,2,4,3,0), 
+             r = c(5,5,4,5,5,5,4,5), 
+             l = c(0,1,2,0,0,0,1,2), 
+             m = c(5,5,4,4,5,5,4,5))
+```
+
+```{r Running Jags Model}
+N=8
+
+Jags1<-jags(ambient,
+            parameters.to.save=c("RRISK"),
+            model.file="~/Documents/projects/DHE/manuscript/relative_risk/dhe_rr.txt",
+            n.iter=10000, 
+            n.burnin=1000, 
+            n.thin=1, 
+            n.chains=2)
+
+Jags2<-jags(heat,
+            parameters.to.save=c("RRISK"),
+            model.file="~/Documents/projects/DHE/manuscript/relative_risk/dhe_rr.txt",
+            n.iter=10000, 
+            n.burnin=1000, 
+            n.thin=1, 
+            n.chains=2)
+
+round(Jags1$BUGSoutput$summary,2)
+round(Jags2$BUGSoutput$summary,2)
+```
+
+```{r Quick RR Plots with CI Intervals}
+MCMCplot(Jags1, 
+         params = 'RRISK', 
+         ylim = c(0.01, 1000), ref_ovl = T)
+
+MCMCplot(Jags2, 
+         params = 'RRISK', 
+         ylim = c(0.01, 1000), ref_ovl = T)
+```
+
+```{r Ambient Relative Risk and caterpillar plot}
+S <- ggs(as.mcmc(Jags1))
+
+# View(ggs(as.mcmc(Jags1)))
+# ggs_caterpillar
+
+S %>% 
+  mutate(Genet = case_when(Parameter == "RRISK[1]" ~ "CN2 DS", 
+                           Parameter == "RRISK[2]" ~ "CN4 DS",
+                           Parameter == "RRISK[3]" ~ "HS1 DS",
+                           Parameter == "RRISK[4]" ~ "ML2 DS",
+                           Parameter == "RRISK[5]" ~ "CN2 SM",
+                           Parameter == "RRISK[6]" ~ "CN4 SM",
+                           Parameter == "RRISK[7]" ~ "HS1 SM",
+                           Parameter == "RRISK[8]" ~ "ML2 SM"), 
+         Tank_treatment = "Ambient") -> S_plot_ambient
+
+#ggmcmc(S, plot=c("density", "running", "caterpillar"))
+
+ggs_caterpillar(S %>% 
+                  filter(!Parameter %in% c("deviance")), 
+                sort = F, thick_ci = c(0.05, 0.95), 
+                thin_ci = F) + 
+  scale_x_log10(breaks = c(0.01,0.1,1,10,100,1000), 
+                labels=c(0.01,0.1,1,10,100,1000), 
+                limits = c(0.01,1000)) + 
+  geom_vline(aes(xintercept = 1)) + 
+  scale_y_discrete(limits = rev(levels(S$Parameter))) + 
+  theme_bw()
+```
+
+```{r Heat Relative Risk and caterpillar plot}
+S <- ggs(as.mcmc(Jags2))
+
+S %>% 
+  mutate(Genet = case_when(Parameter == "RRISK[1]" ~ "CN2 DS", 
+                           Parameter == "RRISK[2]" ~ "CN4 DS",
+                           Parameter == "RRISK[3]" ~ "HS1 DS",
+                           Parameter == "RRISK[4]" ~ "ML2 DS",
+                           Parameter == "RRISK[5]" ~ "CN2 SM",
+                           Parameter == "RRISK[6]" ~ "CN4 SM",
+                           Parameter == "RRISK[7]" ~ "HS1 SM",
+                           Parameter == "RRISK[8]" ~ "ML2 SM"), 
+         Tank_treatment = "Heat") -> S_plot_heat
+
+
+#ggmcmc(S, plot=c("density", "running", "caterpillar"))
+
+ggs_caterpillar(S %>% 
+                  filter(!Parameter %in% c("deviance")), 
+                sort = F, 
+                thin_ci = F) + 
+  scale_x_log10(breaks = c(0.01,0.1,1,10,100,1000), 
+                labels=c(0.01,0.1,1,10,100,1000), 
+                limits = c(0.01,1000)) + 
+  geom_vline(aes(xintercept = 1)) + 
+  scale_y_discrete(limits = rev(levels(S$Parameter))) + 
+  theme_bw()
+```
+
+```{r Combining Results}
+S_plot_ambient %>% 
+  rbind(S_plot_heat) %>% 
+  filter(!Parameter %in% c("deviance")) %>% 
+  mutate(Genet_tank = paste0(.$Genet, .$Tank_treatment)) -> RR_combined
+# View(RR_combined)
+```
+
+```{r Getting median and CI for ggplot}
+ggmcmc::ci(S_plot_ambient, thick_ci = c(0.05, 0.95)) %>% 
+  rbind(ggmcmc::ci(S_plot_heat, thick_ci = c(0.05, 0.95))) %>% 
+  filter(!Parameter %in% c("deviance")) %>% 
+  mutate(Genet = as.factor(Genet), 
+         Tank_treatment = as.factor(Tank_treatment), 
+         GENET = fct_relevel(Genet, "CN2 DS", "CN4 DS", "HS1 DS", "ML2 DS", 
+                             "CN2 SM", "CN4 SM", "HS1 SM", "ML2 SM")) -> RR_ci_ggplot
+
+str(RR_ci_ggplot)
+```
+
+```{r RR plot using GGplot, fig.width = 6, fig.height=7}
+ggplot(data = RR_ci_ggplot,
+       aes(x = median, y = GENET, color = Tank_treatment)) +
+  geom_point(position = position_dodge(width=0.7), 
+             size = 2) +
+  geom_linerange(aes(xmin = Low, xmax = High), 
+                 position = position_dodge(width=0.7)) +
+    scale_x_log10(
+    breaks = c(0.01, 0.1, 1, 10, 100, 1000),
+    labels = c(0.01, 0.1, 1, 10, 100, 1000),
+    limits = c(0.01, 1000)
+  ) + 
+  theme_bw() + 
+  geom_vline(xintercept = 1, 
+             size = 0.25) + 
+  geom_hline(yintercept = 4.5, 
+             linetype = "dotted") +
+  scale_color_manual(values = c("blue3", "orangered2")) + 
+  scale_y_discrete(limits = rev)
+```
+
+Testing Relative Risks due to tank treatment
+Methods following - https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1125071/ 
+
+```{r Pvalue for each genet RR for disease due to treatment}
+RR_ci_ggplot %>% 
+  mutate(logRR = log(median), 
+         loghigh = log(High), 
+         loglow = log(Low), 
+         width = abs(loglow - loghigh),
+         se = width/(2*1.96)) %>%
+  dplyr::select(7:14, - GENET) %>% View()
+  pivot_wider(names_from = Tank_treatment , values_from = 3:7) %>% 
+  mutate(logRR_dif = logRR_Ambient - logRR_Heat, 
+         SE_dif = sqrt((se_Ambient^2)+(se_Heat^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) -> genet_inoc_temp_RR_signif_res
+View(genet_inoc_temp_RR_signif_res)
+```
+
+```{r Pvalue for each genet RR for disease due to treatment}
+RR_ci_plot_2 %>% 
+  mutate(logRR = log(median), 
+         loghigh = log(High), 
+         loglow = log(Low), 
+         width = abs(loglow - loghigh),
+         se = width/(2*1.96)) %>%
+  dplyr::select(7:15, -GENET, -Genet, genet_alone) %>%
+  pivot_wider(names_from = Dtreatment , values_from = 3:7) %>% 
+  mutate(logRR_dif = logRR_Serratia - logRR_Slurry, 
+         SE_dif = sqrt((se_Serratia^2)+(se_Slurry^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) -> dis_inoc_genet_grouped_res
+View(dis_inoc_genet_grouped_res)
+```
+
+## Relative Risk for Tank treatments Combined
+
+```{r Serratia Ambient and Heat results, include = F}
+HDL %>%
+  dplyr::filter(D_treatment %in% c("s_m_placebo", "s_marcscens"), 
+                TIME %in% c("day_10")) %>%
+  dplyr::select(D_treatment, Tank_treatment, Genotype, TIME, HEALTH) %>%
+  mutate(END_STATUS = case_when(
+    HEALTH == "diseased" ~ "DISEASED", 
+    HEALTH == "dead" ~ "DISEASED", 
+    HEALTH == "healthy" ~ "HEALTHY"
+  )) %>%
+  group_by(D_treatment, Genotype, END_STATUS) %>% 
+  dplyr::summarise(count = n()) %>%
+  ungroup() %>%
+  complete(D_treatment, Genotype, END_STATUS, fill = list(count = 0)) -> ser_all_geno
+```
+
+```{r Disease slurry for ambient and heat, include = F}
+HDL %>%
+  dplyr::filter(D_treatment %in% c("disease_slurry", "placebo_slurry"), 
+                TIME %in% c("day_10")) %>%
+  dplyr::select(D_treatment, Tank_treatment, Genotype, TIME, HEALTH) %>%
+  mutate(END_STATUS = case_when(
+    HEALTH == "diseased" ~ "DISEASED", 
+    HEALTH == "dead" ~ "DISEASED", 
+    HEALTH == "healthy" ~ "HEALTHY"
+  )) %>%
+  group_by(D_treatment, Genotype, END_STATUS) %>% 
+  dplyr::summarise(count = n()) %>% 
+  ungroup() %>%
+  complete(D_treatment, Genotype, END_STATUS, fill = list(count = 0)) -> slurry_all_geno
+```
+
+```{r OpenJags model}
+write("model{
+  for (i in 1:k) {
+    #Prior
+    a[i] ~ dbeta(1,1)
+    c[i] ~ dbeta(1,1)
+    
+    # Likelihood
+    h[i] ~ dbin(a[i],r[i])
+    l[i] ~ dbin(c[i],m[i])
+    RRISK[i] <- a[i]/c[i]
+    OR[i] <- (a[i]/(1-a[i]))/(c[i]/(1-c[i]))
+    lnOR[i] <- log(OR[i])
+    ppos[i] <- step(OR[i]-1)
+  }
+}
+",file="~/Desktop/DHE_RR_geno.txt")
+```
+
+k = number of groups (here 4 genos, with tank temp = 8)
+h = total number of experimental corals with disease
+r = total number of experimental corals
+l = total number control corals with disease
+m = total number of control corals
+
+I think the best way to visualise this the ambient treatment and then then the heat treatments. 
+
+```{r Making ambient and heat for Jags}
+serratia <- list(k=4, 
+                h = c(3,4,3,0), 
+                r = c(10,10,9,10), 
+                l = c(0,1,1,3), 
+                m = c(10,10,9,10))
+
+slurry <- list(k=4, 
+             h = c(9,6,6,9), 
+             r = c(10,10,8,10), 
+             l = c(1,1,3,0), 
+             m = c(10,10,9,9))
+```
+
+```{r Running Jags Model}
+N=4
+
+Jags_Ser<-jags(serratia,
+            parameters.to.save=c("RRISK"),
+            model.file="~/Desktop/DHE_RR_geno.txt",
+            n.iter=10000, 
+            n.burnin=1000, 
+            n.thin=1, 
+            n.chains=2)
+
+Jags_Slu<-jags(slurry,
+            parameters.to.save=c("RRISK"),
+            model.file="~/Desktop/DHE_RR_geno.txt",
+            n.iter=10000, 
+            n.burnin=1000, 
+            n.thin=1, 
+            n.chains=2)
+
+round(Jags_Ser$BUGSoutput$summary,2)
+round(Jags_Slu$BUGSoutput$summary,2)
+```
+
+```{r Quick RR Plots with CI Intervals, echo = F}
+MCMCplot(Jags_Ser, 
+         params = 'RRISK', 
+         ylim = c(0.01, 1000), ref_ovl = T)
+
+MCMCplot(Jags_Slu, 
+         params = 'RRISK', 
+         ylim = c(0.01, 1000), ref_ovl = T)
+```
+
+```{r Ambient Relative Risk and caterpillar plot, echo = F}
+S_slu <- ggs(as.mcmc(Jags_Slu))
+
+#View(ggs(as.mcmc(Jags_Slu)))
+ggs_caterpillar
+
+S_slu %>% 
+  mutate(Genet = case_when(Parameter == "RRISK[1]" ~ "CN2 DS", 
+                           Parameter == "RRISK[2]" ~ "CN4 DS",
+                           Parameter == "RRISK[3]" ~ "HS1 DS",
+                           Parameter == "RRISK[4]" ~ "ML2 DS"),
+         Dtreatment = "Slurry") -> S_plot_slu
+
+#ggmcmc(S, plot=c("density", "running", "caterpillar"))
+
+ggs_caterpillar(S_slu %>% filter(!Parameter %in% c("deviance")), sort = F, thick_ci = c(0.05, 0.95), thin_ci = F) + 
+  scale_x_log10(breaks = c(0.01,0.1,1,10,100,1000), labels=c(0.01,0.1,1,10,100,1000), limits = c(0.01,1000)) + 
+  geom_vline(aes(xintercept = 1)) + 
+  scale_y_discrete(limits = rev(levels(S_slu$Parameter))) + 
+  theme_bw()
+```
+
+```{r Heat Relative Risk and caterpillar plot, echo = F}
+S_ser <- ggs(as.mcmc(Jags_Ser))
+
+S_ser %>% 
+  mutate(Genet = case_when(Parameter == "RRISK[1]" ~ "CN2 SM", 
+                           Parameter == "RRISK[2]" ~ "CN4 SM",
+                           Parameter == "RRISK[3]" ~ "HS1 SM",
+                           Parameter == "RRISK[4]" ~ "ML2 SM"), 
+         Dtreatment = "Serratia") -> S_plot_ser
+
+
+#ggmcmc(S, plot=c("density", "running", "caterpillar"))
+
+ggs_caterpillar(S_ser %>% filter(!Parameter %in% c("deviance")), sort = F, thin_ci = F) + 
+  scale_x_log10(breaks = c(0.01,0.1,1,10,100,1000), labels=c(0.01,0.1,1,10,100,1000), limits = c(0.01,1000)) + 
+  geom_vline(aes(xintercept = 1)) + 
+  scale_y_discrete(limits = rev(levels(S_ser$Parameter))) + 
+  theme_bw()
+```
+
+```{r Combining Results, include = F}
+S_plot_ser %>% 
+  rbind(S_plot_slu) %>% 
+  filter(!Parameter %in% c("deviance")) -> RR_combined_geno
+# View(RR_combined)
+```
+
+```{r Getting median and CI for ggplot, include = F}
+ggmcmc::ci(S_plot_ser, thick_ci = c(0.05, 0.95)) %>% 
+  rbind(ggmcmc::ci(S_plot_slu, thick_ci = c(0.05, 0.95))) %>% 
+  filter(!Parameter %in% c("deviance")) %>%
+  mutate(Genet = as.factor(Genet),
+         GENET = fct_relevel(Genet, "CN2 DS", "CN4 DS", "HS1 DS", "ML2 DS", 
+                             "CN2 SM", "CN4 SM", "HS1 SM", "ML2 SM")) -> RR_ci_ggplot
+
+RR_ci_ggplot %>% 
+  mutate(genet_alone = case_when(GENET == "CN2 DS" ~ "CN2", 
+                                 GENET == "CN2 SM" ~ "CN2",
+                                 GENET == "CN4 DS" ~ "CN4", 
+                                 GENET == "CN4 SM" ~ "CN4",
+                                 GENET == "HS1 DS" ~ "HS1", 
+                                 GENET == "HS1 SM" ~ "HS1",
+                                 GENET == "ML2 DS" ~ "ML2", 
+                                 GENET == "ML2 SM" ~ "ML2")) -> RR_ci_plot_2
+# str(RR_ci_ggplot)
+#View(RR_ci_ggplot)
+```
+
+```{r RR plot using GGplot, echo = F}
+ggplot(data = RR_ci_ggplot,
+       aes(x = median, y = GENET)) +
+  geom_point(position = position_dodge(width=0.7), 
+             size = 2) +
+  geom_linerange(aes(xmin = Low, xmax = High), 
+                 position = position_dodge(width=0.7)) +
+    scale_x_log10(
+    breaks = c(0.01, 0.1, 1, 10, 100, 1000),
+    labels = c(0.01, 0.1, 1, 10, 100, 1000),
+    limits = c(0.01, 1000)
+  ) + 
+  theme_bw() + 
+  geom_vline(xintercept = 1, 
+             size = 0.25) + 
+  geom_hline(yintercept = 4.5, 
+             linetype = "dotted") +
+  scale_color_manual(values = c("darkgrey", "black")) + 
+  scale_y_discrete(limits = rev)
+```
+
+```{r RR plot using GGplot, echo = F, fig.width = 5.5, fig.height=7}
+ggplot(data = RR_ci_plot_2,
+       aes(x = median, y = genet_alone, colour = Dtreatment)) +
+  geom_point(position = position_dodge(width = 0.7),
+             size = 2) +
+  geom_linerange(aes(xmin = Low, xmax = High),
+                 position = position_dodge(width = 0.7)) +
+  scale_x_log10(
+    breaks = c(0.01, 0.1, 1, 10, 100, 1000),
+    labels = c(0.01, 0.1, 1, 10, 100, 1000),
+    limits = c(0.01, 1000)
+  ) +
+  theme_bw() +
+  geom_vline(xintercept = 1,
+             size = 0.25) +
+  scale_color_manual(values = c("plum1", "aquamarine3")) +
+  scale_y_discrete(limits = rev)
+```
+
+Testing Relative Risks due to tank treatment
+Methods following - https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1125071/ 
+
+```{r Pvalue for each genet RR for disease due to treatment}
+RR_ci_ggplot %>% 
+  mutate(logRR = log(median), 
+         loghigh = log(High), 
+         loglow = log(Low), 
+         width = abs(loglow - loghigh),
+         se = width/(2*1.96)) %>% 
+  mutate(Genotype = case_when(GENET == "CN2 DS" ~ "CN2", 
+                              GENET == "CN2 SM" ~ "CN2", 
+                              GENET == "CN4 DS" ~ "CN4", 
+                              GENET == "CN4 SM" ~ "CN4", 
+                              GENET == "ML2 DS" ~ "ML2", 
+                              GENET == "ML2 SM" ~ "ML2", 
+                              GENET == "HS1 DS" ~ "HS1", 
+                              GENET == "HS1 SM" ~ "HS1")) %>% 
+  dplyr::select(8:15, - GENET) %>%
+  pivot_wider(names_from = Genotype , values_from = 2:6) %>% 
+  mutate(logRR_dif = logRR_CN2 - logRR_CN4, ## CN2 and CN4
+         SE_dif = sqrt((se_CN2^2)+(se_CN4^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_CN2_CN4 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) %>%
+  mutate(logRR_dif = logRR_CN2 - logRR_HS1, ## CN2 and HS1
+         SE_dif = sqrt((se_CN2^2)+(se_HS1^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_CN2_HS1 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) %>% 
+  mutate(logRR_dif = logRR_CN2 - logRR_ML2, ## CN2 and ML2
+         SE_dif = sqrt((se_CN2^2)+(se_ML2^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_CN2_ML2 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) %>% 
+  mutate(logRR_dif = logRR_CN4 - logRR_HS1, ## CN4 AND HS1
+         SE_dif = sqrt((se_CN4^2)+(se_HS1^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_CN4_HS1 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) %>% 
+  mutate(logRR_dif = logRR_CN4 - logRR_ML2, # CN4 AND ML2
+         SE_dif = sqrt((se_CN4^2)+(se_ML2^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_ML2_CN4 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) %>% 
+  mutate(logRR_dif = logRR_ML2 - logRR_HS1, # ML2 AND HS1
+         SE_dif = sqrt((se_ML2^2)+(se_HS1^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_ML2_HS1 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) -> geno__inor_RR_res
+
+View(geno__inor_RR_res)
+geno__inor_RR_res %>%
+  dplyr::select(1, 27:32) %>% View()
+```
+
+
+## Testing Combined Disease Inoculations for Genet
+
+```{r Genet Results, include = F}
+HDL %>%
+  dplyr::filter(TIME %in% c("day_10")) %>%
+  dplyr::select(D_treatment, Tank_treatment, Genotype, TIME, HEALTH) %>%
+  mutate(
+    END_STATUS = case_when(
+      HEALTH == "diseased" ~ "DISEASED",
+      HEALTH == "dead" ~ "DISEASED",
+      HEALTH == "healthy" ~ "HEALTHY"),
+    Inoc_type = case_when(D_treatment == "disease_slurry" ~ "pathogenic", 
+                          D_treatment == "s_marcscens" ~ "pathogenic", 
+                          D_treatment == "placebo_slurry" ~ "control",
+                          D_treatment == "s_m_placebo" ~ "control"),
+  ) %>% 
+  group_by(Inoc_type, Genotype, END_STATUS) %>%
+  dplyr::summarise(count = n()) %>%
+  ungroup() %>%
+  complete(Inoc_type, Genotype, END_STATUS, fill = list(count = 0)) -> genet_health
+
+# View(genet_health)
+```
+
+```{r OpenJags model}
+write("model{
+  for (i in 1:k) {
+    #Prior
+    a[i] ~ dbeta(1,1)
+    c[i] ~ dbeta(1,1)
+    
+    # Likelihood
+    h[i] ~ dbin(a[i],r[i])
+    l[i] ~ dbin(c[i],m[i])
+    RRISK[i] <- a[i]/c[i]
+    OR[i] <- (a[i]/(1-a[i]))/(c[i]/(1-c[i]))
+    lnOR[i] <- log(OR[i])
+    ppos[i] <- step(OR[i]-1)
+  }
+}
+",file="~/Desktop/DHE_RR_geno.txt")
+```
+
+k = number of groups (here 4 genos)
+h = total number of experimental corals with disease
+r = total number of experimental corals
+l = total number control corals with disease
+m = total number of control corals
+
+I think the best way to visualise this the ambient treatment and then then the heat treatments. 
+
+Order is 
+CN2, CN4, HS1, ML2
+
+```{r Making JAGS for just genet, include = F}
+genet <- list(k=4, 
+                h = c(12,10,9,9), 
+                r = c(20,20,17,20), 
+                l = c(1,2,4,3), 
+                m = c(20,20,18,19))
+```
+
+```{r Running Jags Model for genet only, include = F}
+N=4
+
+Jags_gen<-jags(genet,
+            parameters.to.save=c("RRISK"),
+            model.file="~/Desktop/DHE_RR_geno.txt",
+            n.iter=10000, 
+            n.burnin=1000, 
+            n.thin=1, 
+            n.chains=2)
+
+round(Jags_gen$BUGSoutput$summary,2)
+```
+
+```{r Quick RR Plots with CI Intervals, echo = F}
+MCMCplot(Jags_gen, 
+         params = 'RRISK', 
+         ylim = c(0.01, 1000), ref_ovl = T)
+```
+
+```{r Ambient Relative Risk and caterpillar plot}
+S_gen <- ggs(as.mcmc(Jags_gen))
+
+#View(ggs(as.mcmc(Jags_Slu)))
+# ggs_caterpillar
+
+S_gen %>% 
+  mutate(Genet = case_when(Parameter == "RRISK[1]" ~ "CN2", 
+                           Parameter == "RRISK[2]" ~ "CN4",
+                           Parameter == "RRISK[3]" ~ "HS1",
+                           Parameter == "RRISK[4]" ~ "ML2")) -> S_plot_gen
+
+#ggmcmc(S, plot=c("density", "running", "caterpillar"))
+
+ggs_caterpillar(
+  S_gen %>% filter(!Parameter %in% c("deviance")),
+  sort = F,
+  thick_ci = c(0.05, 0.95),
+  thin_ci = F
+) +
+  scale_x_log10(
+    breaks = c(0.01, 0.1, 1, 10, 100, 1000),
+    labels = c(0.01, 0.1, 1, 10, 100, 1000),
+    limits = c(0.01, 1000)
+  ) +
+  geom_vline(aes(xintercept = 1)) +
+  scale_y_discrete(limits = rev(levels(S_gen$Parameter))) +
+  theme_bw()
+```
+
+```{r Getting median and CI for ggplot}
+ggmcmc::ci(S_plot_gen, thick_ci = c(0.05, 0.95)) %>% 
+  filter(!Parameter %in% c("deviance")) %>%
+  mutate(Genet = as.factor(Genet),
+         GENET = fct_relevel(Genet, "CN2", "CN4", "HS1", "ML2")) -> RR_ci_ggplot
+
+# str(RR_ci_ggplot)
+View(RR_ci_ggplot)
+```
+
+```{r RR plot using GGplot, fig.width=5.5, fig.height=7}
+ggplot(data = RR_ci_ggplot,
+       aes(x = median, y = GENET, color = GENET)) +
+  geom_point(position = position_dodge(width=0.7), 
+             size = 2) +
+  geom_linerange(aes(xmin = Low, xmax = High), 
+                 position = position_dodge(width=0.7)) +
+    scale_x_log10(
+    breaks = c(0.01, 0.1, 1, 10, 100, 1000),
+    labels = c(0.01, 0.1, 1, 10, 100, 1000),
+    limits = c(0.01, 1000)
+  ) + 
+  theme_bw() + 
+  geom_vline(xintercept = 1, 
+             size = 0.25) + 
+  scale_color_manual(values = c("wheat3", "navy" ,"springgreen4", "grey60")) + 
+  scale_y_discrete(limits = rev)
+```
+
+Testing Relative Risks due to tank treatment
+Methods following - https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1125071/ 
+
+```{r Pvalue for each genet RR for disease due to treatment}
+RR_ci_ggplot %>% 
+  mutate(logRR = log(median), 
+         loghigh = log(High), 
+         loglow = log(Low), 
+         width = abs(loglow - loghigh),
+         se = width/(2*1.96)) %>% 
+  dplyr::select(8:13) %>% 
+  pivot_wider(names_from = GENET , values_from = 2:6) %>%
+  mutate(logRR_dif = logRR_CN2 - logRR_CN4, ## CN2 and CN4
+         SE_dif = sqrt((se_CN2^2)+(se_CN4^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_CN2_CN4 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) %>%
+  mutate(logRR_dif = logRR_CN2 - logRR_HS1, ## CN2 and HS1
+         SE_dif = sqrt((se_CN2^2)+(se_HS1^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_CN2_HS1 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) %>% 
+  mutate(logRR_dif = logRR_CN2 - logRR_ML2, ## CN2 and ML2
+         SE_dif = sqrt((se_CN2^2)+(se_ML2^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_CN2_ML2 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) %>% 
+  mutate(logRR_dif = logRR_CN4 - logRR_HS1, ## CN4 AND HS1
+         SE_dif = sqrt((se_CN4^2)+(se_HS1^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_CN4_HS1 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) %>% 
+  mutate(logRR_dif = logRR_CN4 - logRR_ML2, # CN4 AND ML2
+         SE_dif = sqrt((se_CN4^2)+(se_ML2^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_ML2_CN4 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) %>% 
+  mutate(logRR_dif = logRR_ML2 - logRR_HS1, # ML2 AND HS1
+         SE_dif = sqrt((se_ML2^2)+(se_HS1^2)), 
+         CI_dif_pos = logRR_dif + (1.96*SE_dif), 
+         CI_dif_neg = logRR_dif - (1.96*SE_dif), 
+         Interaction = logRR_dif/SE_dif, 
+         pvalue_ML2_HS1 = 2*pnorm(abs(Interaction), mean = 0, sd = 1, lower.tail = F)) -> geno_results
+
+geno_results %>%
+  dplyr::select(26:31) %>% View()
+```
+

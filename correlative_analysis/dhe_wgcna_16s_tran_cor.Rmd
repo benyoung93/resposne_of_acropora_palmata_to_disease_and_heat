@@ -1,0 +1,593 @@
+---
+title: "DHE_tran_16s_correlation"
+output: html_document
+date: '2022-06-21'
+---
+
+```{r library loading, include = F}
+library(tidyverse)
+library(venn)
+library(Hmisc)
+library(WGCNA)
+library(ComplexHeatmap)
+```
+
+```{r reading in eigne gene files from WGCNA analyses, include = F}
+read.csv("~/Documents/projects/DHE/manuscript/r_saved_files/correlative_analysis/dhe_tran_eigengenes.csv", 
+         row.names = 1) %>% 
+  rownames_to_column(var = "sample") %>% 
+  mutate(sample = str_replace_all(sample, "_salmon", ""), 
+         sample = str_replace_all(sample, "APAL_", "APAL-"), 
+         sample = str_replace_all(sample, "_", "")) -> eigengene_tran
+
+read.csv("~/Documents/projects/DHE/manuscript/r_saved_files/correlative_analysis/dhe_16s_eigengenes.csv", 
+         row.names = 1) %>% 
+  rownames_to_column(var = "sample") -> eigengene_16s
+
+read.csv("~/Documents/projects/DHE/manuscript/r_saved_files/correlative_analysis/dhe_16s_eigengenes_picrust.csv",
+         row.names = 1) %>%
+  rownames_to_column(var = "sample") %>%
+  mutate(sample = str_replace_all(sample, "\\.", "-")) -> eigengene_16s_picrust
+```
+
+```{r seeing overlpa for 16s and transcriptomic samples, echo = F}
+venn(list(eigengene_tran$sample, eigengene_16s$sample, eigengene_16s_picrust$sample))
+```
+
+```{r filtering datasets sop only common samples, include = F}
+intersect(eigengene_16s$sample, eigengene_tran$sample) -> common_samp_filt
+
+eigengene_tran %>% 
+  dplyr::filter(sample %in% common_samp_filt) %>% 
+  column_to_rownames(var = "sample") -> eigentran_filt
+
+eigengene_16s %>% 
+  dplyr::filter(sample %in% common_samp_filt) %>%
+  column_to_rownames(var = "sample") -> eigen16s_filt
+
+eigengene_16s_picrust %>% 
+  dplyr::filter(sample %in% common_samp_filt) %>%
+  column_to_rownames(var = "sample") -> eigen16s_picrust_filt
+
+eigen16s_filt <- eigen16s_filt[order(row.names(eigen16s_filt), decreasing = T), ]
+eigentran_filt <- eigentran_filt[order(row.names(eigentran_filt), decreasing = T), ]
+eigen16s_picrust_filt <- eigen16s_picrust_filt[order(row.names(eigen16s_picrust_filt), decreasing = T), ]
+
+all(rownames(eigen16s_filt) == rownames(eigentran_filt))
+all(rownames(eigen16s_picrust_filt) == rownames(eigentran_filt))
+all(rownames(eigen16s_picrust_filt) == rownames(eigen16s_filt))
+```
+
+# Introduction for Correlative Analysis
+
+This is for trying to bring together the different omic analyses done for the study. This consists of 
+1. 16s rRNA abundance WGCNA with the 16s rRNA inferred meta genomic function (PiCRUST) WGCNA results. 
+2. Transcriptomic data with 16s abundance and inferred meta genomic function. 
+
+
+## 16s rRNA Abundance with 16s rRNA inferred metagenomic function (PiCRUST). 
+
+In the paper the 16s abundance modules are all of them as only 6 were identified.
+- purple
+- green
+- cyan
+- dark green
+- dark red
+- orange
+
+For the picrust, columns are as follows (in order used in paper)
+- Dark red
+- Red
+- light yellow
+- purple
+- grey60
+- green
+- salmon
+- light cyan 
+- blue
+- yellow
+
+```{r filtered data frames for 16s correlative analysis}
+eigen16s_filt %>%
+  dplyr::select(MEpurple, MEgreen, MEcyan, MEdarkgreen, MEdarkred, MEorange) -> eigen16s_filt_ord
+  
+eigen16s_picrust_filt %>% 
+  dplyr::select(MEdarkred, MEred, MElightyellow, MEpurple, MEgrey60, MEgreen, 
+                MEsalmon, MElightcyan, MEblue, MEyellow) -> eigen16s_picrust_filt_ord
+```
+
+
+```{r correlations and ptests using wgcna function, include = F}
+# correlation
+cor(eigen16s_filt_ord, eigen16s_picrust_filt_ord) -> dhe_16s_cor
+
+# module correlation pvalue
+dhe_16s_cor_pval <- corPvalueStudent(dhe_16s_cor, 
+                                     nrow(eigen16s_filt_ord))
+```
+
+```{r visualising correlations for everything included, echo = F}
+# Will display correlations and their p-values
+textMatrix_cor_16s = paste(signif(dhe_16s_cor, 2), "\n(",
+signif(dhe_16s_cor_pval, 1), ")", sep = "");
+dim(textMatrix_cor_16s) = dim(dhe_16s_cor_pval)
+par(mar = c(6, 8.5, 3, 3));
+# Display the correlation values within a heatmap plot
+labeledHeatmap(
+  Matrix = dhe_16s_cor,
+  xLabels = colnames(dhe_16s_cor),
+  xSymbols = colnames(dhe_16s_cor),
+  yLabels = rownames(dhe_16s_cor),
+  ySymbols = rownames(dhe_16s_cor),
+  colorLabels = FALSE,
+  colors = blueWhiteRed(50),
+  textMatrix = textMatrix_cor_16s,
+  setStdMargins = FALSE,
+  cex.text = 0.5,
+  zlim = c(-1, 1),
+  cex.lab = 0.5,
+  main = paste("Module-trait relationships")
+)
+```
+
+```{r complex heatmap dataframes with correct columns, include = F}
+textMatrix_cor_16s -> tmatrix_ch
+```
+
+```{r Left annotation for heatmap, include =F}
+ccann <- data.frame(rownames(dhe_16s_cor))
+colnames(ccann) <- c("Modules")
+colcol <- list(
+  "Modules" = c(
+    "MEpurple" = "purple",
+    "MEgreen" = "Green",
+    "MEcyan" = "cyan",
+    "MEdarkgreen" = "Dark Green",
+    "MEdarkred" = "darkred",
+    "MEorange" = "orange"
+  )
+)
+
+samname_right <- HeatmapAnnotation(
+  df = ccann,
+  col = colcol,
+  which = "row",
+  simple_anno_size = unit(0.5, "cm"),
+  annotation_name_gp = gpar(fontsize = 10), 
+  show_annotation_name = F)
+
+col_fun = colorRamp2(c(-1, 0, 1), c("royalblue", "white", "red"))
+```
+
+```{r bottom annotation, echo = F}
+ccann <- data.frame(colnames(dhe_16s_cor))
+colnames(ccann) <- c("Modules")
+colcol <- list(
+  "Modules" = c(
+    "MEdarkred" = "Dark Red",
+    "MEred" = "Red",
+    "MElightyellow" = "Light Yellow",
+    "MEpurple" = "Purple",
+    "MEgrey60" = "Grey 60",
+    "MEgreen" = "Green",
+    "MEsalmon" = "Salmon",
+    "MElightcyan" = "Light Cyan",
+    "MEblue" = "Blue",
+    "MEyellow" = "Yellow"
+  )
+)
+
+samname_bottom <- HeatmapAnnotation(
+  df = ccann,
+  col = colcol,
+  which = "column",
+  simple_anno_size = unit(0.5, "cm"),
+  annotation_name_gp = gpar(fontsize = 10), 
+  show_annotation_name = F)
+```
+
+
+```{r WGCNA complex heatmap, echo = F, fig.width = 6, fig.height=3}
+Heatmap(
+  dhe_16s_cor %>% as.matrix(),
+  cluster_rows = F,
+  cluster_columns = F,
+  left_annotation = samname_right,
+  bottom_annotation = samname_bottom,
+  show_column_names = F, 
+  show_row_names = F,
+  col = col_fun,
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    grid.text(sprintf(textMatrix_cor_16s[i, j]), x, y, gp = gpar(fontsize = 10))
+  })
+```
+
+
+## Transcriptomic to 16s and Picrust
+
+In the paper the 16s abundance modules are all of them as only 6 were identified.
+- blue
+- black
+- dark green 
+- light cyan
+- dark turquoise
+- grey 60 
+- dark red (REMOVE)
+- light yellow (REMOVE)
+
+For the16s rRna abundance and  picrust, columns are as follows (in order used in paper)
+- purple
+- green
+- cyan
+- dark green
+- dark red
+- orange (REMOVE)
+- Dark red (REMOVE)
+- Red
+- light yellow
+- purple
+- grey60
+- green
+- salmon
+- light cyan (REMOVE)
+- blue
+- yellow
+
+```{r filtered data frames for 16s correlative analysis}
+eigentran_filt %>%
+  dplyr::select(MEblue, MEblack, MEdarkgreen, MElightcyan, MEdarkturquoise, 
+                MEgrey60) -> eigentran_filt_ord
+```
+
+```{r dataframe for the rows of 16s abundance and picrust, echo = F}
+eigen16s_filt_ord %>% 
+  t() %>% 
+  as.data.frame() %>%
+  rownames_to_column(var = "modules") %>% 
+  mutate(modules = paste("abun", .$modules, sep = "_")) %>% 
+  column_to_rownames(var = "modules") %>% 
+  dplyr::slice(-5,-6) %>%
+  t() %>% 
+  as.data.frame() %>% 
+  cbind(eigen16s_picrust_filt_ord %>% 
+          t() %>% 
+          as.data.frame() %>% 
+          rownames_to_column(var = "modules") %>% 
+          mutate(modules = paste("pic", .$modules, sep = "_")) %>% 
+          column_to_rownames(var = "modules") %>%
+          dplyr::slice(-8) %>%
+          t() %>% 
+          as.data.frame()) -> rRNA_comb
+
+all(rownames(rRNA_comb) == rownames(eigentran_filt_ord))
+```
+
+```{r correlations and ptests using wgcna function, include = F}
+# correlation
+cor(eigentran_filt_ord, rRNA_comb) -> dhe_t_a16
+
+# module correlation pvalue
+dhe_t_a16_pval <- corPvalueStudent(dhe_t_a16, 
+                                     nrow(eigentran_filt_ord))
+```
+
+```{r visualising correlations for everything included, echo = F}
+# Will display correlations and their p-values
+textMatrix_cor_t_a16 = paste(signif(dhe_t_a16, 2),
+                             "\n(",
+                             signif(dhe_t_a16_pval, 1),
+                             ")",
+                             sep = "")
+dim(textMatrix_cor_t_a16) = dim(dhe_t_a16_pval)
+par(mar = c(6, 8.5, 3, 3))
+# Display the correlation values within a heatmap plot
+labeledHeatmap(
+  Matrix = dhe_t_a16,
+  xLabels = colnames(dhe_t_a16),
+  xSymbols = colnames(dhe_t_a16),
+  yLabels = rownames(dhe_t_a16),
+  ySymbols = rownames(dhe_t_a16),
+  colorLabels = FALSE,
+  colors = blueWhiteRed(50),
+  textMatrix = textMatrix_cor_t_a16,
+  setStdMargins = FALSE,
+  cex.text = 0.5,
+  zlim = c(-1, 1),
+  cex.lab = 0.5,
+  main = paste("Module-trait relationships")
+)
+```
+
+```{r complex heatmap dataframes with correct columns, include = F}
+textMatrix_cor_t_a16 -> tmatrix_ch
+```
+
+```{r Left annotation for heatmap, include =F}
+ccann <- data.frame(rownames(dhe_t_a16))
+colnames(ccann) <- c("Modules")
+colcol <- list(
+  "Modules" = c(
+    "MEblue" = "Blue",
+    "MEblack" = "Black",
+    "MEdarkgreen" = "Dark Green",
+    "MElightcyan" = "Light Cyan",
+    "MEdarkturquoise" = "Dark Turquoise",
+    "MEgrey60" = "Grey 60"
+  )
+)
+
+samname_left <- HeatmapAnnotation(
+  df = ccann,
+  col = colcol,
+  which = "row",
+  simple_anno_size = unit(0.5, "cm"),
+  annotation_name_gp = gpar(fontsize = 10), 
+  show_annotation_name = F)
+
+col_fun = colorRamp2(c(-1, 0, 1), c("royalblue", "white", "red"))
+```
+
+```{r bottom annotation, echo = F}
+ccann <- data.frame(colnames(dhe_t_a16))
+colnames(ccann) <- c("Modules")
+colcol <- list(
+  "Modules" = c(
+    "abun_MEpurple" = "purple",
+    "abun_MEgreen" = "Green",
+    "abun_MEcyan" = "cyan",
+    "abun_MEdarkgreen" = "Dark Green",
+    "pic_MEdarkred" = "Dark Red",
+    "pic_MEred" = "Red",
+    "pic_MElightyellow" = "Light Yellow",
+    "pic_MEpurple" = "Purple",
+    "pic_MEgrey60" = "Grey 60",
+    "pic_MEgreen" = "Green",
+    "pic_MEsalmon" = "Salmon",
+    "pic_MEblue" = "Blue",
+    "pic_MEyellow" = "Yellow"
+  )
+)
+
+samname_bottom <- HeatmapAnnotation(
+  df = ccann,
+  col = colcol,
+  which = "column",
+  simple_anno_size = unit(0.5, "cm"),
+  annotation_name_gp = gpar(fontsize = 10), 
+  show_annotation_name = F)
+```
+
+
+```{r WGCNA complex heatmap, echo = F, fig.width = 8, fig.height=3.5}
+Heatmap(
+  dhe_t_a16 %>% as.matrix(),
+  cluster_rows = F,
+  cluster_columns = F,
+  left_annotation = samname_left,
+  bottom_annotation = samname_bottom,
+  show_column_names = F, 
+  show_row_names = F,
+  col = col_fun,
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    grid.text(sprintf(textMatrix_cor_t_a16[i, j]), x, y, gp = gpar(fontsize = 12))
+  },
+  column_split = data.frame(rep(c("16s Abundance", "16s Inferred Metagenomic"), c(4, 9))),
+  column_gap = unit(0.7, "cm"))
+```
+
+
+## Base R Method that is USed in WGCNA 16s abundance and gene expression (pearson correaltion)
+
+```{r correlations and ptests using wgcna function, include = F}
+# correlation
+cor(eigentran_filt, eigen16s_filt) -> dhe_t_16s_cor
+
+# module correlation pvalue
+dhe_t_16s_cor_pval <- corPvalueStudent(dhe_t_16s_cor, 
+                                     nrow(eigentran_filt))
+```
+
+```{r visualising correlations for everything included, echo = F}
+# Will display correlations and their p-values
+textMatrix_cor = paste(signif(dhe_t_16s_cor, 2), "\n(",
+signif(dhe_t_16s_cor_pval, 1), ")", sep = "");
+dim(textMatrix_cor) = dim(dhe_t_16s_cor)
+par(mar = c(6, 8.5, 3, 3));
+# Display the correlation values within a heatmap plot
+labeledHeatmap(
+  Matrix = dhe_t_16s_cor,
+  xLabels = colnames(dhe_t_16s_cor),
+  xSymbols = colnames(dhe_t_16s_cor),
+  yLabels = rownames(dhe_t_16s_cor),
+  ySymbols = rownames(dhe_t_16s_cor),
+  colorLabels = FALSE,
+  colors = blueWhiteRed(50),
+  textMatrix = textMatrix_cor,
+  setStdMargins = FALSE,
+  cex.text = 0.5,
+  zlim = c(-1, 1),
+  cex.lab = 0.5,
+  main = paste("Module-trait relationships")
+)
+```
+
+```{r only modules included in paper figure, echo = F}
+dhe_t_16s_cor %>% 
+  as.data.frame() %>%
+  dplyr::select(-MEgrey) %>% 
+  rownames_to_column(var = "t_mods") %>%
+  dplyr::filter(!t_mods %in% c("MEpurple", "MEyellow", "MEpink", "MEmidnightblue", 
+                              "MEcyan", "MEdarkgrey", "MEgreenyellow")) %>% 
+  column_to_rownames(var = "t_mods") %>% 
+  as.matrix() -> dhe_t_16s_cor_REM
+
+dhe_t_16s_cor_pval %>% 
+  as.data.frame() %>%
+  dplyr::select(-MEgrey) %>% 
+  rownames_to_column(var = "t_mods") %>%
+  dplyr::filter(!t_mods %in% c("MEpurple", "MEyellow", "MEpink", "MEmidnightblue", 
+                              "MEcyan", "MEdarkgrey", "MEgreenyellow")) %>% 
+  column_to_rownames(var = "t_mods") %>% 
+  as.matrix() -> dhe_t_16s_cor_pval_REM
+```
+
+```{r visualising correlations for everything included, echo = F}
+# Will display correlations and their p-values
+textMatrix_cor = paste(signif(dhe_t_16s_cor_REM, 2), "\n(",
+signif(dhe_t_16s_cor_pval_REM, 1), ")", sep = "");
+dim(textMatrix_cor) = dim(dhe_t_16s_cor_REM)
+par(mar = c(6, 8.5, 3, 3));
+# Display the correlation values within a heatmap plot
+labeledHeatmap(
+  Matrix = dhe_t_16s_cor_REM,
+  xLabels = colnames(dhe_t_16s_cor_REM),
+  xSymbols = colnames(dhe_t_16s_cor_REM),
+  yLabels = rownames(dhe_t_16s_cor_REM),
+  ySymbols = rownames(dhe_t_16s_cor_REM),
+  colorLabels = FALSE,
+  colors = blueWhiteRed(50),
+  textMatrix = textMatrix_cor,
+  setStdMargins = FALSE,
+  cex.text = 0.5,
+  zlim = c(-1, 1),
+  cex.lab = 0.5,
+  main = paste("Module-trait relationships")
+)
+```
+
+
+## Base R Method that is USed in WGCNA 16s abundance and picrust data
+
+```{r correlations and ptests using wgcna function, include = F}
+# correlation
+cor(eigen16s_filt, eigen16s_picrust_filt) -> dhe_t_16s_cor
+
+# module correlation pvalue
+dhe_t_16s_cor_pval <- corPvalueStudent(dhe_t_16s_cor, 
+                                     nrow(eigen16s_filt))
+```
+
+```{r visualising correlations for everything included, echo = F}
+# Will display correlations and their p-values
+textMatrix_cor = paste(signif(dhe_t_16s_cor, 2), "\n(",
+signif(dhe_t_16s_cor_pval, 1), ")", sep = "");
+dim(textMatrix_cor) = dim(dhe_t_16s_cor)
+par(mar = c(6, 8.5, 3, 3));
+# Display the correlation values within a heatmap plot
+labeledHeatmap(
+  Matrix = dhe_t_16s_cor,
+  xLabels = colnames(dhe_t_16s_cor),
+  xSymbols = colnames(dhe_t_16s_cor),
+  yLabels = rownames(dhe_t_16s_cor),
+  ySymbols = rownames(dhe_t_16s_cor),
+  colorLabels = FALSE,
+  colors = blueWhiteRed(50),
+  textMatrix = textMatrix_cor,
+  setStdMargins = FALSE,
+  cex.text = 0.5,
+  zlim = c(-1, 1),
+  cex.lab = 0.5,
+  main = paste("Module-trait relationships")
+)
+```
+
+## Base R Method that is USed in WGCNA 16s abundance and gene expression (pearson correaltion)
+
+```{r correlations and ptests using wgcna function, include = F}
+# correlation
+cor(eigentran_filt, eigen16s_picrust_filt) -> dhe_t_16s_cor
+
+# module correlation pvalue
+dhe_t_16s_cor_pval <- corPvalueStudent(dhe_t_16s_cor, 
+                                     nrow(eigentran_filt))
+```
+
+```{r visualising correlations for everything included, echo = F, fig.width= 8, fig.width=8}
+# Will display correlations and their p-values
+textMatrix_cor = paste(signif(dhe_t_16s_cor, 2), "\n(",
+signif(dhe_t_16s_cor_pval, 1), ")", sep = "");
+dim(textMatrix_cor) = dim(dhe_t_16s_cor)
+par(mar = c(6, 8.5, 3, 3));
+# Display the correlation values within a heatmap plot
+labeledHeatmap(
+  Matrix = dhe_t_16s_cor,
+  xLabels = colnames(dhe_t_16s_cor),
+  xSymbols = colnames(dhe_t_16s_cor),
+  yLabels = rownames(dhe_t_16s_cor),
+  ySymbols = rownames(dhe_t_16s_cor),
+  colorLabels = FALSE,
+  colors = blueWhiteRed(50),
+  textMatrix = textMatrix_cor,
+  setStdMargins = FALSE,
+  cex.text = 0.5,
+  zlim = c(-1, 1),
+  cex.lab = 0.5,
+  main = paste("Module-trait relationships")
+)
+```
+
+```{r only modules included in paper figure, echo = F}
+dhe_t_16s_cor %>% 
+  as.data.frame() %>%
+#  dplyr::select(-MEgrey) %>% 
+  rownames_to_column(var = "t_mods") %>%
+  dplyr::filter(!t_mods %in% c("MEpurple", "MEyellow", "MEpink", "MEmidnightblue", 
+                              "MEcyan", "MEdarkgrey", "MEgreenyellow")) %>% 
+  column_to_rownames(var = "t_mods") %>% 
+  as.matrix() -> dhe_t_16s_cor_REM
+
+dhe_t_16s_cor_pval %>% 
+  as.data.frame() %>%
+#  dplyr::select(-MEgrey) %>% 
+  rownames_to_column(var = "t_mods") %>%
+  dplyr::filter(!t_mods %in% c("MEpurple", "MEyellow", "MEpink", "MEmidnightblue", 
+                              "MEcyan", "MEdarkgrey", "MEgreenyellow")) %>% 
+  column_to_rownames(var = "t_mods") %>% 
+  as.matrix() -> dhe_t_16s_cor_pval_REM
+```
+
+```{r visualising correlations for everything included, echo = F, fig.width=9, fig.height=5}
+# Will display correlations and their p-values
+textMatrix_cor = paste(signif(dhe_t_16s_cor_REM, 2), "\n(",
+signif(dhe_t_16s_cor_pval_REM, 1), ")", sep = "");
+dim(textMatrix_cor) = dim(dhe_t_16s_cor_REM)
+par(mar = c(6, 8.5, 3, 3));
+# Display the correlation values within a heatmap plot
+labeledHeatmap(
+  Matrix = dhe_t_16s_cor_REM,
+  xLabels = colnames(dhe_t_16s_cor_REM),
+  xSymbols = colnames(dhe_t_16s_cor_REM),
+  yLabels = rownames(dhe_t_16s_cor_REM),
+  ySymbols = rownames(dhe_t_16s_cor_REM),
+  colorLabels = FALSE,
+  colors = blueWhiteRed(50),
+  textMatrix = textMatrix_cor,
+  setStdMargins = FALSE,
+  cex.text = 0.5,
+  zlim = c(-1, 1),
+  cex.lab = 0.5,
+  main = paste("Module-trait relationships")
+)
+```
+
+
+## Hmisc Method
+
+```{r with one matrix, echo = F}
+cbind(eigen16s_filt, eigentran_filt) %>% 
+  as.matrix() -> comb_cor
+rcorr(comb_cor, 
+      type = "pearson")
+```
+
+```{r with two matrices}
+eigen16s_filt %>%
+  as.matrix() -> eigen16s_filt_mat
+
+eigentran_filt %>% 
+  as.matrix() -> eigentran_filt_mat
+
+rcorr(eigentran_filt_mat, eigen16s_filt_mat, 
+      type = "pearson")
+```
+

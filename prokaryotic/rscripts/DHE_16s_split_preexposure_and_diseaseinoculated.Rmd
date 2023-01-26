@@ -1,0 +1,3028 @@
+---
+title: "DHE_16s_init_PE_exp_split"
+output: html_document
+date: '2022-06-15'
+---
+
+```{r}
+# library(devtools)
+# install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+```
+
+
+```{r package loading, include = F}
+library(zCompositions)
+library(phyloseq)
+library(vegan)
+library(DESeq2)
+library(tidyverse)
+library(dendextend)
+library(viridis)
+library(reshape)
+#library(seqRFLP)
+library(phangorn)
+library(ape)
+library(dada2)
+library(DECIPHER)
+library(ggtree)
+library(compare)
+library(ALDEx2)
+library(CoDaSeq)
+library(ggdendro)
+library(factoextra)
+library(PCAtools)
+library(magrittr)
+library(breakaway)
+library(DivNet) # last checked with version 0.3.5
+library(ANCOMBC)
+library(ComplexHeatmap)
+library(circlize)
+library(venn)
+library(DEGreport)
+library(biomformat)
+library(scales)
+library(randomcoloR)
+library(microbiomeMarker)
+library(pairwiseAdonis)
+library(microbiome)
+```
+
+```{r loading saved data objects needed for all coral samples analysis, echo = F}
+load(file = "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/r_data_objects/coral_samples_all_for_analysis/treatment_file_ALLDATES.RData")
+load(file = "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/r_data_objects/coral_samples_all_for_analysis/DHE_taxo_ALLDATES.RData")
+load(file = "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/r_data_objects/coral_samples_all_for_analysis/DHE_counts_ALLDATES.RData")
+load(file = "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/r_data_objects//phylogenetic_tree_16s/fitGTR.RData")
+load(file = "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/r_data_objects/coral_samples_all_for_analysis/DHE_ASV_sequences.RData")
+
+nrow(treat_DHE_filt_all)
+ncol(DHE_counts_coral)
+nrow(DHE_counts_coral)
+nrow(edited_taxo)
+
+all(rownames(treat_DHE_filt_all) == colnames(DHE_counts_coral))
+```
+
+```{r Removing serratia placebo and healthy slurry samples that became infectd, include = F}
+treat_DHE_filt_all %>% 
+  dplyr::filter(Dtreatment == c("smplacebo") & 
+                  health_status == "diseased") %>%
+  rownames() -> smplac_dis_filt
+length(smplac_dis_filt)
+
+treat_DHE_filt_all %>% 
+  dplyr::filter(Dtreatment == c("placeboslurry") & 
+                  health_status == "diseased") %>% 
+  rownames() -> helslu_dis_filt
+length(helslu_dis_filt)
+
+nrow(treat_DHE_filt_all)
+treat_DHE_filt_all %>% 
+  rownames_to_column(var = "samples") %>%
+  dplyr::filter(!samples %in% helslu_dis_filt) %>% 
+  dplyr::filter(!samples %in% smplac_dis_filt) %>% 
+  column_to_rownames(var = "samples") -> treat_DHE_filt_all
+nrow(treat_DHE_filt_all)
+```
+
+```{r Generating additinal metadata variables for all coral sample analysis, include = F}
+treat_DHE_filt_all %>%
+  mutate(
+    geno_health = factor(
+      paste0(treat_DHE_filt_all$Genotype, treat_DHE_filt_all$Health)
+    ),
+    Health = factor(
+      Health,
+      levels = c(
+        "pre_exposure",
+        "visually_healthy_day10",
+        "diseased_intermediate",
+        "diseased_day10"
+      )
+    ),
+    correct_treat = case_when(
+      Dtreatment == "smplacebo" &
+        timepoint == "initial" ~ "spla_baseline",
+      Dtreatment == "smarcscens" &
+        timepoint == "initial" ~ "smar_baseline",
+      Dtreatment == "smplacebo" &
+        Dif_dis_treat == "SM_placebo_intermediate" ~ "spla_intermediate",
+      Dtreatment == "smarcscens" &
+        Dif_dis_treat == "Serratia_intermediate" ~ "smar_intermediate",
+      Dtreatment == "smarcscens" &
+        timepoint == "17th_aug" ~ "smar_day10",
+      Dtreatment == "smplacebo" &
+        timepoint == "17th_aug" ~ "spla_day10",
+      Dtreatment == "diseaseslurry" &
+        timepoint == "initial" ~ "disslu_baseline",
+      Dtreatment == "placeboslurry" &
+        timepoint == "initial" ~ "helslu_baseline",
+      Dtreatment == "diseaseslurry" &
+        timepoint == "17th_aug" ~ "disslu_day10",
+      Dtreatment == "placeboslurry" &
+        timepoint == "17th_aug" ~ "helslu_day10",
+      Dtreatment == "placeboslurry" &
+        Dif_dis_treat == "SM_placebo_intermediate" ~ "helslu_intermediate",
+      Dtreatment == "diseaseslurry" &
+        Dif_dis_treat == "Disease_slurry_intermediate" ~ "disslu_intermediate"
+    ),
+    Health_split = Health,
+    HI = case_when(
+      Health == "pre_exposure" ~ "pre_exposure",
+      Health == "visually_healthy_day10" ~ "visually_healthy",
+      Health == "diseased_intermediate" ~ "diseased",
+      Health == "diseased_day10" ~ "diseased"
+    ),
+    Inoculated = case_when(
+      Health == "pre_exposure" ~ "control",
+      HI == "diseased" ~ "inoculated",
+      HI == "visually_healthy" ~ "inoculated"
+    ), 
+    basic_health = case_when(
+      Health == "visually_healthy_day10" ~ "visually_healthy", 
+      Health == "diseased_day10" ~ "diseased", 
+      Health == "diseased_intermediate" ~ "diseased", 
+      Health == "pre_exposure" ~ "pre_exposure"
+    ), 
+    sampling_timepoint = case_when(timepoint == "initial" ~ "control", 
+                                   timepoint == "17th_aug" ~ "day_10",
+                                   timepoint == "8th_aug" ~ "day_1_9",
+                                   timepoint == "9th_aug" ~ "day_1_9", 
+                                   timepoint == "10th_aug" ~ "day_1_9", 
+                                   timepoint == "11th_aug" ~ "day_1_9", 
+                                   timepoint == "12th_aug" ~ "day_1_9", 
+                                   timepoint == "13th_aug" ~ "day_1_9", 
+                                   timepoint == "14th_aug" ~ "day_1_9", 
+                                   timepoint == "15th_aug" ~ "day_1_9", 
+                                   timepoint == "16th_aug" ~ "day_1_9"), 
+    Dif_dis_treat = case_when(
+      basic_health == "pre_exposure" ~ "baseline",
+      Dtreatment == "diseaseslurry" &
+        timepoint == "17th_aug" ~ "Disease_slurry",
+      Dtreatment == "smarcscens" & 
+        timepoint == "10th_aug" ~ "Serratia", 
+      Dtreatment == "diseaseslurry" & 
+        timepoint == "8th_aug" ~ "Disease_slurry",
+      Dtreatment == "placeboslurry" &
+        timepoint == "17th_aug" ~ "Healthy_slurry",
+      Dtreatment == "smplacebo" &
+        timepoint == "17th_aug" ~ "SM_placebo",
+      Dtreatment == "smarcscens" &
+        timepoint == "17th_aug" ~ "Serratia",
+      Dtreatment == "diseaseslurry" &
+        timepoint == "9th_aug" ~ "Disease_slurry",
+      Dtreatment == "diseaseslurry" &
+        timepoint == "10th_aug" ~ "Disease_slurry",
+      Dtreatment == "diseaseslurry" &
+        timepoint == "11th_aug" ~ "Disease_slurry",
+      Dtreatment == "diseaseslurry" &
+        timepoint == "12th_aug" ~ "Disease_slurry",
+      Dtreatment == "diseaseslurry" &
+        timepoint == "16th_aug" ~ "Disease_slurry",
+      Dtreatment == "smarcscens" &
+        timepoint == "9th_aug" ~ "Serratia",
+      Dtreatment == "smarcscens" &
+        timepoint == "11th_aug" ~ "Serratia",
+      Dtreatment == "smarcscens" &
+        timepoint == "12th_aug" ~ "Serratia",
+      Dtreatment == "smarcscens" &
+        timepoint == "13th_aug" ~ "Serratia",
+      Dtreatment == "smarcscens" &
+        timepoint == "15th_aug" ~ "Serratia",
+      Dtreatment == "smarcscens" &
+        timepoint == "16th_aug" ~ "Serratia")) %>%
+  dplyr::mutate(Health = relevel(as.factor(Health), "pre_exposure"), 
+                basic_health = as.factor(basic_health)) -> tfall_coral
+```
+
+```{r Few more variables for analysis, include = F}
+tfall_coral %>% 
+  mutate(Health_disease = paste0(basic_health, Dif_dis_treat)) -> tfall_coral
+```
+
+```{r Ordering counts and treatment file after removal of samples, echo = F}
+ncol(DHE_counts_coral)
+nrow(tfall_coral)
+
+matchup <- match(rownames(tfall_coral), colnames(DHE_counts_coral))
+DHE_counts_coral <- DHE_counts_coral[ ,matchup]
+all(rownames(tfall_coral) == colnames(DHE_counts_coral))
+
+nrow(treat_DHE_filt_all)
+ncol(DHE_counts_coral)
+nrow(DHE_counts_coral)
+nrow(edited_taxo)
+```
+
+```{r Generating filtered name variables, include=F}
+DHE_taxo_mat <- as.matrix(edited_taxo)
+
+PCA_asv <- as.matrix(DHE_counts_coral)
+PCA_tax <- DHE_taxo_mat
+PCA_sam <- tfall_coral
+```
+
+```{r Generating PhyloSeq Object for all samples, include=F}
+ASV <- otu_table(PCA_asv, taxa_are_rows = T)
+TAX <- tax_table(PCA_tax)
+SAMP <- sample_data(PCA_sam)
+
+physeq_main <- phyloseq(ASV, TAX, SAMP, fitGTR$tree)
+physeq_main
+```
+
+```{r removing singletons and zeros from physeq object, echo = F}
+prune_taxa(taxa_sums(physeq_main) > 0, physeq_main) %>% 
+  prune_taxa(taxa_sums(.) > 1, .) -> physeq_sing_zero_removed
+physeq_sing_zero_removed
+```
+
+```{r additional filtering out of ASVs with less than 7 across all samples , include= = F}
+physeq_sing_zero_removed
+physeq_main_10 <- prune_taxa(taxa_sums(physeq_sing_zero_removed) > 10, physeq_sing_zero_removed)
+physeq_main_10       
+
+ntaxa(physeq_main)
+ntaxa(physeq_sing_zero_removed)
+ntaxa(physeq_main_10)
+
+length(get_taxa_unique(physeq_main, "genus")) # 1254
+length(get_taxa_unique(physeq_sing_zero_removed, "genus")) #466
+length(get_taxa_unique(physeq_main_10, "genus")) #2413
+```
+
+
+## Pre Exposure Samples
+
+This is for two analysis 
+a) Short term heat stress
+b) Genet differences
+
+For both the initial prep and phyloseq creation is the same. 
+
+```{r making data tables for just the pre exposure samples, include = F}
+tfall_coral %>% 
+  dplyr::filter(basic_health %in% "pre_exposure") -> pe_tfall
+
+DHE_counts_coral %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "sample_ID") %>% 
+  dplyr::filter(sample_ID %in% rownames(pe_tfall)) %>% 
+  column_to_rownames(var = "sample_ID") %>% 
+  t() %>% 
+  as.data.frame() -> pe_counts
+```
+
+```{r making phyloseq object with filtering, include = F}
+DHE_taxo_mat <- as.matrix(edited_taxo)
+
+PCA_asv <- as.matrix(pe_counts)
+PCA_tax <- DHE_taxo_mat
+PCA_sam <- pe_tfall
+
+ASV <- otu_table(PCA_asv, taxa_are_rows = T)
+TAX <- tax_table(PCA_tax)
+SAMP <- sample_data(PCA_sam)
+
+physeq_pe <- phyloseq(ASV, TAX, SAMP, fitGTR$tree)
+physeq_pe
+```
+
+```{r removing singletons and zeros from physeq object, echo = F}
+prune_taxa(taxa_sums(physeq_pe) > 0, physeq_pe) %>% 
+  prune_taxa(taxa_sums(.) > 1, .) -> physeq_pe_sing_zero_rem
+physeq_pe_sing_zero_rem
+```
+
+```{r additional filtering out of ASVs with less than 7 across all samples , include= = F}
+physeq_pe_sing_zero_rem
+physeq_pe_10 <- prune_taxa(taxa_sums(physeq_pe_sing_zero_rem) > 10, physeq_pe_sing_zero_rem)
+physeq_pe_10       
+
+ntaxa(physeq_pe)
+ntaxa(physeq_pe_sing_zero_rem)
+ntaxa(physeq_pe_10)
+
+length(get_taxa_unique(physeq_pe, "genus")) # 548
+length(get_taxa_unique(physeq_pe_sing_zero_rem, "genus")) #345
+length(get_taxa_unique(physeq_pe_10, "genus")) #279
+```
+
+
+### Short Term Heat Stress Analysis
+#### Principal Component Analysis
+
+```{r CLR transformation and prep for principal component analysis, include = F}
+otu_table(physeq_pe_10) -> ASV_mat
+cmultRepl(t(ASV_mat), 
+          method = "CZM", 
+          label = 0) -> ASV_mat
+codaSeq.clr(ASV_mat, 
+            samples.by.row = T) -> ASV_mat_CLR
+t(ASV_mat_CLR) -> ASV_mat_CLR_t
+
+allsamps <- pca(ASV_mat_CLR_t, 
+                metadata = pe_tfall, 
+                removeVar = 0.1)
+```
+
+```{r Plots from PCAtools, echo = F, fig.width=9, fig.height=6}
+## Plot showing the genes which drive the principal component variances. 
+plotloadings(allsamps, labSize = 3)
+```
+
+```{r Plots from PCAtools, fig.width=6, fig.height=3}
+## Scree plot showing amount of variance explained by each PC (bars) and cumulative variance as you progress along bars (line)
+screeplot(allsamps, 
+          getComponents(allsamps, 1:15), 
+          axisLabSize = 10, 
+          titleLabSize = 10, 
+          returnPlot = T, 
+          ylim = c(0,55), 
+          vline = c(findElbowPoint(allsamps$variance))) +
+  geom_label(aes(x = findElbowPoint(allsamps$variance) + 1, y = 25,
+      label = 'Elbow method', vjust = -1, size = 4))
+```
+
+```{r PCA axes metadata significanace plot, fig.width=13, fig.height = 4}
+eigencorplot(
+  allsamps,
+  metavars = c("Tank_treatment", "Genotype"),
+  components = getComponents(allsamps, 1:11),
+  col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+  cexCorval = 1.2,
+  fontCorval = 2,
+  posLab = 'all',
+  rotLabX = 45,
+  scale = TRUE,
+  main = bquote(
+    Principal ~ Component ~ Pearson ~ r ^ 2 ~ metadata ~ significant ~ correlation
+  ),
+  plotRsquared = T,
+  corFUN = 'pearson',
+  corUSE = 'pairwise.complete.obs',
+  corMultipleTestCorrection = 'BH',
+  signifSymbols = c('****', '***', '**', '*', ''),
+  signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+)
+```
+
+```{r sample loadings for principal component analysis, echo = F}
+pca_samp <- prcomp(ASV_mat_CLR)
+sample_loadings <- as.data.frame(pca_samp$x)
+#summary(pca_samp)
+fviz_eig(pca_samp, addlabels = TRUE, ylim = c(0, 30), )
+```
+
+```{r Percentage Loadings of PC Axis, include = F}
+pc1 <- round(pca_samp$sdev[1]^2/sum(pca_samp$sdev^2),2) * 100
+pc2 <- round(pca_samp$sdev[2]^2/sum(pca_samp$sdev^2),2) * 100
+pc3 <- round(pca_samp$sdev[3]^2/sum(pca_samp$sdev^2),2) * 100
+pc4 <- round(pca_samp$sdev[4]^2/sum(pca_samp$sdev^2),2) * 100
+pc5 <- round(pca_samp$sdev[5]^2/sum(pca_samp$sdev^2),2) * 100
+```
+
+```{r PCA Timepoint, echo = F}
+ggplot(
+  sample_loadings, aes(PC1, PC2, color = PCA_sam$Tank_treatment)) +
+  geom_point(size = 2) +
+  labs(
+    x = paste("PC1: ", pc1, "% variance", sep = ""),
+    y = paste("PC2: ", pc2, "% variance", sep = "")
+  ) +
+  theme(
+    text = element_text(size = 12, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 9)
+  ) + 
+  theme(legend.key.size = unit(0.8, "cm")) +
+  stat_ellipse(aes(PC1, PC2, group = PCA_sam$Tank_treatment), type = "norm") +
+  scale_color_manual(name = "Temperature Treatment",
+                     values = c("blue3", "orangered2"))
+
+ggplot(sample_loadings, aes(PC2, PC3, color = PCA_sam$Tank_treatment)) +
+  geom_point(size = 2) +
+  labs(x = paste("PC2: ", pc2, "% variance", sep = ""),
+       y = paste("PC3: ", pc3, "% variance", sep = "")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  ) +
+  stat_ellipse() +
+    scale_color_manual(name = "Temperature Treatment",
+                     values = c("blue3", "orangered2"))
+
+ggplot(sample_loadings, aes(PC3, PC4, color = PCA_sam$Tank_treatment)) +
+  geom_point(size = 2) +
+  labs(x = paste("PC3: ", pc3, "% variance", sep = ""),
+       y = paste("PC4: ", pc4, "% variance", sep = "")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  ) +
+  stat_ellipse() +
+    scale_color_manual(name = "Temperature Treatment",
+                     values = c("blue3", "orangered2"))
+
+ggplot(sample_loadings, aes(PC4, PC5, color = PCA_sam$Tank_treatment)) +
+  geom_point(size = 2) +
+  labs(x = paste("PC4: ", pc4, "% variance", sep = ""),
+       y = paste("PC5: ", pc5, "% variance", sep = "")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  ) +
+  stat_ellipse() +
+    scale_color_manual(name = "Temperature Treatment",
+                     values = c("blue3", "orangered2"))
+```
+
+#### Beta Significance Testing Online
+
+Okay so this is all new to me but here is what I am thinking from looking at other peoples github repos and analysis
+1. ANOSIM
+- test whether distances BETWEEN groups are greater than WITHIN groups.
+- vegan::
+
+2. PERMANOVA
+- Tests Differences between groups
+- vegan::adonis2
+
+3. Dispersion 
+- Differences in dispersion or spread of the treatments. 
+- vegan::permutest
+
+
+#### PERMANOVA Analysis for Short Term Heat Stress
+
+https://www.nicholas-ollberding.com/post/introduction-to-the-statistical-analysis-of-microbiome-data-in-r/
+
+```{r CLR transformed phyloseq pbject for permanova, include = F}
+ASV <- otu_table(ASV_mat_CLR_t, taxa_are_rows = T)
+TAX <- tax_table(PCA_tax)
+SAMP <- sample_data(PCA_sam)
+
+physeq_pe_CLR <- phyloseq(ASV, TAX, SAMP, fitGTR$tree)
+physeq_pe_CLR
+```
+
+```{r Prepping Distance Matrix and ADONIS Test, echo = F}
+#Generate distance matrix
+clr_dist_matrix <- phyloseq::distance(physeq_pe_CLR, method = "euclidean")
+
+#ADONIS test
+adonis_res <- vegan::adonis2(clr_dist_matrix ~ phyloseq::sample_data(physeq_pe_CLR)$Tank_treatment)
+adonis_res
+```
+
+```{r}
+dispr <- vegan::betadisper(clr_dist_matrix, phyloseq::sample_data(physeq_pe_CLR)$Tank_treatment)
+dispr
+```
+
+```{r}
+plot(dispr, main = "Ordination Centroids and Dispersion Labeled: Aitchison Distance", sub = "")
+```
+
+```{r}
+boxplot(dispr, main = "", xlab = "")
+```
+
+```{r Significance test for temperature, echo = F}
+permutest(dispr)
+```
+
+So what i get is 
+- Significant permutest -> there is a significant difference in point dispersion between ambient and STHS. 
+- Significant PERMANOVA -> there is significant difference in composition between ambient and STHS. 
+
+Due to significant permutest, this indicates that the significant PERMANOVA could be due to 
+- differences in the centroid position between the two groups 
+- differences in point dispersion. 
+
+Links to Useful PERMANOVA and betadisper
+https://stats.stackexchange.com/questions/314184/betadisper-is-significant-can-i-still-do-adonis-and-anosim
+https://www.researchgate.net/post/Betadisper_and_adonis_in_R_Am_I_interpreting_my_output_correctly
+https://www.researchgate.net/post/PERMANOVA-was-not-significant-but-PERMUTEST-was-significant-What-does-that-mean
+
+But, with some more reading
+*IF* the study has a balanced design (which I do, ambient and STHS have equal number of samples) then the heterogenity is fine. So maybe mine is okay?
+
+I am very confuddled. 
+
+#### Beta Testing with Stephs Stats
+
+```{r physeq CLR transformed object made earlier, include = F}
+physeq_pe_CLR
+```
+
+```{r distance of the CLR transformed counts, include = F}
+dis_clr <- vegdist(otu_table(t(physeq_pe_CLR)), method ="euclidean")
+```
+
+```{r pairwise within groups testing, echo = F}
+mod_clr <- betadisper(dis_clr, sample_data(physeq_pe_CLR)$Tank_treatment)
+permutest(mod_clr, permutations = how(nperm=999))
+#TukeyHSD(mod_clr)
+boxplot(mod_clr)
+```
+
+```{r between group differences}
+ps_clr_meta <- as(sample_data(physeq_pe_10), "data.frame")
+adonis2(dis_clr ~ Tank_treatment, 
+       data = ps_clr_meta, permutations = 999, 
+         method = "euclidean")
+```
+
+```{r pairwise between group, echo = F}
+pairwise.adonis(dis_clr, ps_clr_meta$Tank_treatment, 
+                sim.method = "euclidean",
+                p.adjust.m = "bonferroni")
+```
+
+#### Differential Abundance Analysis
+
+```{r running differential abiundance analysis with ancombc, include = F}
+pe_sths_ancom <- ancombc(
+  phyloseq = physeq_pe_10,
+  formula = "Tank_treatment",
+  p_adj_method = "holm",
+  lib_cut = 0,
+  group = "Tank_treatment",
+  struc_zero = F,
+  neg_lb = F,
+  tol = 1e-5,
+  max_iter = 100,
+  conserve = TRUE,
+  alpha = 0.01,
+  global = TRUE
+)
+```
+
+```{r Subsetting results to dataframes, include = F}
+as.data.frame(pe_sths_ancom$res) %>% 
+  dplyr::rename(., Beta = 1) %>% 
+  dplyr::rename(., SE = 2) %>%
+  dplyr::rename(., W = 3) %>%
+  dplyr::rename(., p_val = 4) %>%
+  dplyr::rename(., padj = 5) %>%
+  dplyr::rename(., diff_abn = 6) %>%
+  mutate(method = "ancombc") %>% 
+  rownames_to_column(var = "ASV")  %>% 
+  inner_join(edited_taxo %>% 
+               rownames_to_column(var = "ASV"), 
+             by = "ASV") %>% 
+  column_to_rownames(var = "ASV") -> pe_sths_res
+
+pe_sths_res %>% 
+  dplyr::filter(diff_abn %in% "TRUE") -> pe_sths_res_DA_0.01
+
+# View(pe_sths_res_DA_0.05)
+```
+
+```{r Checking LFC greater and less than 1 for heat, echo = F}
+pe_sths_res_DA_0.01 %>% nrow()
+pe_sths_res_DA_0.01 %>%
+  dplyr::filter(Beta >= 0) %>% nrow()
+pe_sths_res_DA_0.01 %>%
+  dplyr::filter(Beta <= 0) %>% nrow()
+```
+
+```{r writing DAA results for health status, include = F}
+pe_sths_res_DA_0.01 %>%
+  dplyr::filter(Beta >= 1 | Beta <= -1) -> pe_sths_res_DA_0.01_LFC1
+View(pe_sths_res_DA_0.01_LFC1)
+
+write.csv(pe_sths_res_DA_0.01_LFC1 %>%
+            dplyr::filter(Beta >=1 | Beta <=-1),
+          file = "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/r_saved_files/preexposure_16s/pe_da_sths_0.01_lfc1.csv")
+```
+
+```{r Heatmap prep for pre exposure and visually healthy, include = F}
+ASV_mat_CLR_t[rownames(pe_sths_res_DA_0.01_LFC1),] %>% 
+  as.matrix() -> matmatnorder
+
+# Colours for the tank treatments
+data.frame(pe_tfall$Tank_treatment) -> ccann
+colnames(ccann) <- c("Tank_treatment")
+colcol <- list("Tank_treatment" = c("ambient"="grey60", "heat"="black"))
+
+# Top annotation bar for the complex heatmap
+samname <- HeatmapAnnotation(df = ccann,
+                             which = "col",
+                             col = colcol,                        
+                             simple_anno_size = unit(0.6, "cm"),
+                             annotation_name_gp = gpar(fontsize = 10),
+                             annotation_name_side = "left")
+
+# Fill for the gene VST data
+col_fun = colorRamp2(c(-2, 0, 2), 
+                     c("dodgerblue4", "white", "red3"))
+col_fun(seq(-3, 3))
+
+# adding annotation into vsd count matrix
+edited_taxo %>%
+  rownames_to_column(var = "ASV") %>% 
+  dplyr::select(-species) %>%
+  right_join(matmatnorder %>%
+               as.data.frame() %>% 
+               rownames_to_column(var="ASV"),
+             by = "ASV") %>% 
+  column_to_rownames(var="ASV") -> matmatnorder
+#View
+
+# Changing names to a character
+matmatnorder$genus <- as.character(matmatnorder$genus)
+matmatnorder$family <- as.character(matmatnorder$family)
+
+#id_to_annot, need to have rownames when putting into complex heatmap
+hello <- rowAnnotation(foo = anno_text(matmatnorder %>% as.data.frame() %>% dplyr::select(genus)))
+```
+
+```{r Heatmap for LFC1-1 DAA pre exposure and visually healthy, fig.height=10, fig.width=8, echo = F}
+  Heatmap(
+    t(scale(
+      t(matmatnorder %>% as.data.frame() %>% dplyr::select(-c(
+        1:6
+      )))
+    )),
+    cluster_columns = T,
+    show_row_dend = F,
+    show_column_dend = T,
+    column_km = 2,
+    column_gap = unit(0.3, "cm"),
+    row_km = 2,
+    row_gap = unit(0.3, "cm"),
+    col = col_fun,
+    row_title = NULL,
+    column_title = NULL,
+    top_annotation = samname,
+    right_annotation = rowAnnotation(foo = anno_text(
+      matmatnorder$family,  gp = gpar(fontsize = 7, font = 10))), 
+    show_row_names = F, 
+    show_column_names = F,
+    column_dend_height = unit(3, "cm"))
+```
+
+
+#### Alpha Analysis
+
+```{r divnet-rs prep, include = F}
+otu_table(physeq_pe_10) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "taxa") %>%
+  write.csv(
+    .,
+    "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/divnet/DHE_pe_counts_4_divnet.csv",
+    row.names = F
+  )
+```
+
+```{r Sample data for divnet, include = F}
+all(rownames(pe_tfall) == colnames(otu_table(physeq_pe_10)))
+
+# this divent model is looking at Dtreat outcome, as PCA does not really show genet difs its fine.
+model.matrix(~ Tank_treatment - 1, pe_tfall) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "sample") %>%
+  write.csv(.,
+            file = "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/divnet/DHE_pe_samples_4_divnet.csv",
+            row.names = F)
+```
+
+```{bash divnet in rust, include = F}
+# divnet-rs /Users/benjamin.d.young/Documents/projects/DHE/manuscript/divnet/DHE_divnet_pe_tanktreat.toml
+```
+
+```{r Reading in Divnet RS, include = F}
+divnet_rs <- read.table("/Users/benjamin.d.young/Documents/projects/DHE/manuscript/divnet/DHE_pe_tanktreat_divout.csv", 
+                        sep = ",",
+                        header = TRUE)
+# View(divnet_rs)
+
+nreplicates <- 5
+# Replicate 0 is actually the estimates for the real data.
+rep0 <- divnet_rs[divnet_rs$replicate == 0, -1]
+rownames(rep0) <- rep0$sample
+rep0$sample <- NULL
+#View(divnet_rs)
+```
+
+```{r Making the Shannon and Simpson results for actual Data, include =F}
+rep0_shannon <- apply(rep0, 1, DivNet::shannon_true)
+rep0_simpson <- apply(rep0, 1, DivNet::simpson_true)
+```
+
+```{r Shannon and Simspon for the Replicates, include = F}
+# Now calculate the shannon index for the replicates.
+reps_shannon <- sapply(1:nreplicates, function (i) {
+  d <- divnet_rs[divnet_rs$replicate == i, -1]
+  rownames(d) <- d$sample
+  d$sample <- NULL
+  apply(d, 1, DivNet::shannon_true)
+})
+
+reps_simpson <- sapply(1:nreplicates, function (i) {
+  d <- divnet_rs[divnet_rs$replicate == i, -1]
+  rownames(d) <- d$sample
+  d$sample <- NULL
+
+  apply(d, 1, DivNet::simpson_true)
+})
+```
+
+```{r Shannon and Simpson Diversity Estimates for replicates, include = F}
+# What we want is the variance in the diversity estimates for the replicates.
+reps_shannon_error <- t(apply(reps_shannon, 1, function (x) {
+  c(var(x), sd(x))
+}))
+colnames(reps_shannon_error) <- c("variance", "sd")
+
+# What we want is the variance in the diversity estimates for the replicates.
+reps_simpson_error <- t(apply(reps_simpson, 1, function (x) {
+  c(var(x), sd(x))
+}))
+colnames(reps_simpson_error) <- c("variance", "sd")
+```
+
+```{r Making nice dataframes so we can group and make nice plots, echo=T}
+tibble(names = names(rep0_shannon),
+       shannon = rep0_shannon) %>%
+  left_join(reps_shannon_error %>%
+              as.data.frame %>%
+              rownames_to_column("names")) %>%
+  mutate(ciupper = shannon + 2 * sd,
+         cilower = shannon - 2 * sd) %>% 
+  filter(names %in% rownames(pe_tfall)) %>% 
+  inner_join(pe_tfall %>% 
+              rownames_to_column(var = "names")) %>% 
+  column_to_rownames(var = "names") -> alpha_shannon_treat
+
+tibble(names = names(rep0_simpson),
+       simpson = rep0_simpson) %>%
+  left_join(reps_simpson_error %>%
+              as.data.frame %>%
+              rownames_to_column("names")) %>%
+  mutate(ciupper = simpson + 2 * sd,
+         cilower = simpson - 2 * sd) %>%
+  inner_join(pe_tfall %>% 
+              rownames_to_column(var = "names")) %>%
+  column_to_rownames(var = "names") -> alpha_simpson_treat
+
+View(alpha_shannon_treat)
+View(alpha_simpson_treat)
+```
+
+```{r writing alpha analysis to file, include = F}
+# write.csv(alpha_simpson_treat, 
+#           file = "/Users/benyoung/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/manuscript/r_saved_files/inoc_info/simp.csv")
+# 
+# write.csv(alpha_shannon_treat, 
+#           file = "/Users/benyoung/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/manuscript/r_saved_files/inoc_info/shan.csv")
+```
+
+
+##### Simspon
+
+```{r SIMPSON PLOTTING tank treatment, echo = T, fig.width=5, fig.height=6}
+ggplot(data = alpha_simpson_treat %>% rownames_to_column(var = "samples"), 
+       aes(x = Tank_treatment, y = simpson, color = Tank_treatment, group = Tank_treatment)) + 
+  geom_point(position = position_dodge(width=0.5), 
+             size = 2) + 
+  geom_linerange(aes(ymin = cilower, ymax = ciupper), 
+                 position = position_dodge(.5), 
+                 size = 1) + 
+  theme_bw() + 
+  scale_color_manual(values = c("blue3", "orangered2"))
+
+# tibble(names = names(rep0_simpson),
+#        simpson = rep0_simpson) %>%
+#   left_join(reps_simpson_error %>%
+#               as.data.frame %>%
+#               rownames_to_column("names")) %>%
+#   mutate(ciupper = simpson + 2 * sd,
+#          cilower = simpson - 2 * sd) %>%
+#   ggplot(aes(x = names, color = alpha_simpson_treat$Tank_treatment)) +
+#   geom_segment(aes(xend = names, y = cilower, yend = ciupper)) +
+#   geom_point(aes(y = simpson)) +
+#   xlab("samples") +
+#   ylab("simpson estimate") +
+#   ggtitle("divnet-rs") +
+#   theme_bw() + 
+#   theme(panel.grid.minor.x = element_blank(),
+#         axis.text.x = ggplot2::element_text(angle = 45, hjust = 1)) + 
+#   theme_bw()
+```
+
+```{r releveling TT so ambient is base for simpson, include = F}
+alpha_simpson_treat %>%
+  mutate(TT = relevel(factor(Tank_treatment), ref = "ambient")) -> alpha_simpson_treat
+```
+
+```{r hypothesis testing for simpson TT, echo = F}
+pe_tt_simpson <- betta(
+  chats = alpha_simpson_treat$simpson,
+  ses = sqrt(alpha_simpson_treat$variance),
+  X = model.matrix(~ TT, data = alpha_simpson_treat)
+)
+pe_tt_simpson$table
+```
+
+inoculated_smar1 -> no significant difs between smar inoc 1 and smar inoc 2
+
+
+##### Shannon
+
+```{r Plots for Shannon, echo = F, fig.width=5, fig.height=6}
+ggplot(data = alpha_shannon_treat %>% rownames_to_column(var = "samples"), 
+       aes(x = Tank_treatment, y = shannon, color = Tank_treatment, group = Tank_treatment)) + 
+  geom_point(position = position_dodge(width=0.5), 
+             size = 2) + 
+  geom_linerange(aes(ymin = cilower, ymax = ciupper), 
+                 position = position_dodge(.5), 
+                 size = 1) +
+  theme_bw() + 
+  scale_color_manual(values = c("blue3", "orangered2"))
+
+# tibble(names = names(rep0_shannon),
+#        shannon = rep0_shannon) %>%
+#   left_join(reps_shannon_error %>%
+#               as.data.frame %>%
+#               rownames_to_column("names")) %>%
+#   mutate(ciupper = shannon + 2 * sd,
+#          cilower = shannon - 2 * sd) %>%
+#   ggplot(aes(x = names, color = alpha_shannon_treat$Tank_treatment)) +
+#   geom_segment(aes(xend = names, y = cilower, yend = ciupper)) +
+#   geom_point(aes(y = shannon)) +
+#   xlab("samples") +
+#   ylab("shannon estimate") +
+#   ggtitle("divnet-rs") +
+#   theme_bw() +
+#   theme(panel.grid.minor.x = element_blank(),
+#         axis.text.x = ggplot2::element_text(angle = 45, hjust = 1)) +
+#   theme_bw()
+```
+
+```{r releveling TT so ambient is base level, include = F}
+alpha_shannon_treat %>%
+  mutate(TT = relevel(factor(Tank_treatment), ref = "ambient")) -> alpha_shannon_treat
+```
+
+```{r Significance testing for shannon and TT, echo = F}
+pe_tt_shannon <- betta(
+  chats = alpha_shannon_treat$shannon,
+  ses = sqrt(alpha_shannon_treat$variance),
+  X = model.matrix(~ TT, data = alpha_shannon_treat)
+)
+pe_tt_shannon$table
+```
+
+Siognificantly lower shannon in 
+
+Intercept is the disease slurry diseased
+
+Interpreting results
+- For visually healthy, see an increase of richness of *25.97* taxa, with the SE of *15.75*. 
+- For visually healthy, this not significant (hypothesis test for change in richness not be rejected) as p-val = *0.099*. 
+- For diseased, see an increase of richness of *100.11* taxa, with SE of *33.18*. 
+- For diseased, this is significant (hypothesis test for change in richness can be rejected) as p-val = *0.003*. 
+
+
+#### Relative Abundance
+
+```{r Rel Abun Long Format Data Frame, include = F}
+physeq_pe_10 %>%
+  tax_glom(taxrank = "genus") %>% # agglomerate at family level
+  transform_sample_counts(function(x) {
+    x / sum(x)
+  }) %>% # Transform to rel. abundance
+  psmelt() %>%  # Melt to long format
+  arrange(genus) -> gen_abundance
+head(gen_abundance)
+```
+
+```{r Filtering at .01, include = F}
+gen_abundance %>%
+  dplyr::select(genus, Tank_treatment, Abundance) %>%
+  group_by(genus, Tank_treatment) %>%
+  dplyr::summarize(avg_abundance = mean(Abundance)) %>%
+  filter(avg_abundance > 0.01) -> filt_gen_abundance
+View(filt_gen_abundance)
+
+PCA_tax %>% 
+  as.data.frame() %>%
+  dplyr::select(phylum, class, order, genus) %>% 
+  distinct() %>% 
+  inner_join(filt_gen_abundance) %>%
+              as.data.frame() -> filt_gen_abundance
+View(filt_gen_abundance)
+```
+
+```{r}
+ggplot(filt_gen_abundance) +
+  geom_col(
+    mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus),
+    position = "fill",
+    show.legend = TRUE,
+    color = "black"
+  ) +
+  ylab("Proportion of Community") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    title = element_text(size = 10)
+  )
+```
+
+```{r Creating Plot, echo = F, fig.height=11, fig.width=7}
+library(RColorBrewer)
+library(randomcoloR)
+
+ggplot(filt_gen_abundance) +
+  geom_col(
+    mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus),
+    position = "fill",
+    show.legend = TRUE, 
+    color = "black"
+  ) +
+  ylab("Proportion of Community") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    title = element_text(size = 10)
+  ) + 
+  scale_fill_manual(values = c("darkorchid", "darkolivegreen1", "lightskyblue", "darkgreen", "deeppink", "khaki2", "firebrick", "brown1", "darkorange1", "cyan1", "royalblue4", "darksalmon", "darkblue", "royalblue4", "dodgerblue3", "steelblue1", "lightskyblue", "darkseagreen", "darkgoldenrod1", "darkseagreen", "darkorchid", "darkolivegreen1", "brown1", "darkorange1", "cyan1", "darkgrey"))
+#  scale_x_discrete(guide = guide_axis(n.dodge = 2))
+  
+ggplot(filt_gen_abundance) +
+  geom_col(
+    mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus),
+    position = "fill",
+    show.legend = TRUE, 
+    color = "black"
+  ) +
+  ylab("Proportion of Community") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    title = element_text(size = 10)
+  ) + 
+  scale_fill_manual(values = colorRampPalette(brewer.pal(11, "Dark2"))(25))
+
+set.seed(13)
+ggplot(filt_gen_abundance) +
+  geom_col(
+    mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus),
+    position = "fill",
+    show.legend = TRUE, 
+    color = "black"
+  ) +
+  ylab("Proportion of Community") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    title = element_text(size = 10)
+  ) + 
+  scale_fill_manual(values = distinctColorPalette(25))
+```
+
+```{r Filtering at .01, include = F}
+gen_abundance %>%
+  dplyr::select(genus, Tank_treatment, Genotype, Abundance) %>%
+  group_by(genus, Genotype, Tank_treatment) %>%
+  dplyr::summarize(avg_abundance = mean(Abundance)) %>%
+  filter(avg_abundance > 0.01) -> filt_gen_abundance
+View(filt_gen_abundance)
+
+PCA_tax %>% 
+  as.data.frame() %>%
+  dplyr::select(phylum, class, order, genus) %>% 
+  distinct() %>% 
+  inner_join(filt_gen_abundance) %>%
+              as.data.frame() -> filt_gen_abundance
+View(filt_gen_abundance)
+```
+
+```{r}
+ggplot(filt_gen_abundance) +
+  geom_col(
+    mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus, group = Genotype),
+    position = "fill",
+    show.legend = TRUE,
+    color = "black"
+  ) +
+  ylab("Proportion of Community") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    title = element_text(size = 10)
+  ) + 
+  facet_wrap(~ Genotype)
+```
+
+```{r Creating Plot, echo = F, fig.height=11, fig.width=7}
+library(RColorBrewer)
+library(randomcoloR)
+
+# ggplot(filt_gen_abundance) +
+#   geom_col(
+#     mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus),
+#     position = "fill",
+#     show.legend = TRUE, 
+#     color = "black"
+#   ) +
+#   ylab("Proportion of Community") +
+#   xlab(NULL) +
+#   theme_minimal() +
+#   theme(
+#     axis.text.y.left = element_text(size = 10),
+#     axis.text.x = element_text(size = 10),
+#     axis.title.y = element_text(size = 10),
+#     title = element_text(size = 10)
+#   ) + 
+#   scale_fill_manual(values = c("darkorchid", "darkolivegreen1", "lightskyblue", "darkgreen", "deeppink", "khaki2", "firebrick", "brown1", "darkorange1", "cyan1", "royalblue4", "darksalmon", "darkblue", "royalblue4", "dodgerblue3", "steelblue1", "lightskyblue", "darkseagreen", "darkgoldenrod1", "darkseagreen", "darkorchid", "darkolivegreen1", "brown1", "darkorange1", "cyan1", "darkgrey")) + 
+#   facet_wrap(~ Genotype)
+#  scale_x_discrete(guide = guide_axis(n.dodge = 2))
+  
+ggplot(filt_gen_abundance) +
+  geom_col(
+    mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus),
+    position = "fill",
+    show.legend = TRUE, 
+    color = "black"
+  ) +
+  ylab("Proportion of Community") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    title = element_text(size = 10)
+  ) + 
+  scale_fill_manual(values = colorRampPalette(brewer.pal(11, "Dark2"))(33)) + 
+  facet_wrap(~ Genotype)
+
+set.seed(13)
+ggplot(filt_gen_abundance) +
+  geom_col(
+    mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus),
+    position = "fill",
+    show.legend = TRUE, 
+    color = "black"
+  ) +
+  ylab("Proportion of Community") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    title = element_text(size = 10), 
+    legend.key.size = unit(0.5, 'cm')
+  ) + 
+  scale_fill_manual(values = distinctColorPalette(33)) + 
+  facet_wrap(~ Genotype)
+```
+
+
+### Genotype Pre Expowsure
+
+#### Principal Component Analysis
+
+```{r Plots from PCAtools, echo = F, fig.width=9, fig.height=6}
+## Plot showing the genes which drive the principal component variances. 
+plotloadings(allsamps, labSize = 3)
+```
+
+```{r Plots from PCAtools, fig.width=6, fig.height=3}
+## Scree plot showing amount of variance explained by each PC (bars) and cumulative variance as you progress along bars (line)
+screeplot(allsamps, 
+          getComponents(allsamps, 1:15), 
+          axisLabSize = 10, 
+          titleLabSize = 10, 
+          returnPlot = T, 
+          ylim = c(0,55), 
+          vline = c(findElbowPoint(allsamps$variance))) +
+  geom_label(aes(x = findElbowPoint(allsamps$variance) + 1, y = 25,
+      label = 'Elbow method', vjust = -1, size = 4))
+```
+
+```{r PCA axes metadata significanace plot, fig.width=13, fig.height = 4}
+eigencorplot(
+  allsamps,
+  metavars = c("Tank_treatment", "Genotype"),
+  components = getComponents(allsamps, 1:11),
+  col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+  cexCorval = 1.2,
+  fontCorval = 2,
+  posLab = 'all',
+  rotLabX = 45,
+  scale = TRUE,
+  main = bquote(
+    Principal ~ Component ~ Pearson ~ r ^ 2 ~ metadata ~ significant ~ correlation
+  ),
+  plotRsquared = T,
+  corFUN = 'pearson',
+  corUSE = 'pairwise.complete.obs',
+  corMultipleTestCorrection = 'BH',
+  signifSymbols = c('****', '***', '**', '*', ''),
+  signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+)
+```
+
+```{r sample loadings for principal component analysis, echo = F}
+pca_samp <- prcomp(ASV_mat_CLR)
+sample_loadings <- as.data.frame(pca_samp$x)
+#summary(pca_samp)
+fviz_eig(pca_samp, addlabels = TRUE, ylim = c(0, 30), )
+```
+
+```{r Percentage Loadings of PC Axis, include = F}
+pc1 <- round(pca_samp$sdev[1]^2/sum(pca_samp$sdev^2),2) * 100
+pc2 <- round(pca_samp$sdev[2]^2/sum(pca_samp$sdev^2),2) * 100
+pc3 <- round(pca_samp$sdev[3]^2/sum(pca_samp$sdev^2),2) * 100
+pc4 <- round(pca_samp$sdev[4]^2/sum(pca_samp$sdev^2),2) * 100
+pc5 <- round(pca_samp$sdev[5]^2/sum(pca_samp$sdev^2),2) * 100
+```
+
+```{r PCA Timepoint, echo = F}
+ggplot(
+  sample_loadings, aes(PC1, PC2, color = PCA_sam$Genotype, shape = PCA_sam$Tank_treatment)) +
+  geom_point(size = 2) +
+  labs(
+    x = paste("PC1: ", pc1, "% variance", sep = ""),
+    y = paste("PC2: ", pc2, "% variance", sep = "")
+  ) +
+  theme(
+    text = element_text(size = 12, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 9)
+  ) + 
+  theme(legend.key.size = unit(0.8, "cm")) +
+  stat_ellipse(aes(PC1, PC2, group = PCA_sam$Genotype), type = "norm") +
+  scale_color_manual(name = "Genet",
+                     values = c("wheat3", "navy" ,"springgreen3", "grey60"))
+
+ggplot(sample_loadings, aes(PC2, PC3, color = PCA_sam$Genotype, shape = PCA_sam$Tank_treatment)) +
+  geom_point(size = 2) +
+  labs(x = paste("PC2: ", pc2, "% variance", sep = ""),
+       y = paste("PC3: ", pc3, "% variance", sep = "")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  ) +
+  stat_ellipse(aes(PC2, PC3, group = PCA_sam$Genotype), type = "norm") +
+    scale_color_manual(name = "Genet",
+                     values = c("wheat3", "navy" ,"springgreen3", "grey60"))
+
+ggplot(sample_loadings, aes(PC3, PC4, color = PCA_sam$Genotype, shape = PCA_sam$Tank_treatment)) +
+  geom_point(size = 2) +
+  labs(x = paste("PC3: ", pc3, "% variance", sep = ""),
+       y = paste("PC4: ", pc4, "% variance", sep = "")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  ) +
+  stat_ellipse(aes(PC3, PC4, group = PCA_sam$Genotype), type = "norm") +
+    scale_color_manual(name = "Genet",
+                     values = c("wheat3", "navy" ,"springgreen3", "grey60"))
+
+ggplot(sample_loadings, aes(PC4, PC5, color = PCA_sam$Genotype, shape = PCA_sam$Tank_treatment)) +
+  geom_point(size = 2) +
+  labs(x = paste("PC4: ", pc4, "% variance", sep = ""),
+       y = paste("PC5: ", pc5, "% variance", sep = "")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  ) +
+  stat_ellipse(aes(PC4, PC5, group = PCA_sam$Genotype), type = "norm") +
+    scale_color_manual(name = "Genet",
+                     values = c("wheat3", "navy" ,"springgreen3", "grey60"))
+```
+
+#### Beta Significance Testing Online
+
+Okay so this is all new to me but here is what I am thinking from looking at other peoples github repos and analysis
+1. ANOSIM
+- test whether distances BETWEEN groups are greater than WITHIN groups.
+- vegan::
+
+2. PERMANOVA
+- Tests Differences between groups
+- vegan::adonis2
+
+3. Dispersion 
+- Differences in dispersion or spread of the treatments. 
+- vegan::permutest
+
+
+#### PERMANOVA Analysis for Short Term Heat Stress
+
+https://www.nicholas-ollberding.com/post/introduction-to-the-statistical-analysis-of-microbiome-data-in-r/
+
+```{r CLR transformed phyloseq pbject for permanova, include = F}
+ASV <- otu_table(ASV_mat_CLR_t, taxa_are_rows = T)
+TAX <- tax_table(PCA_tax)
+SAMP <- sample_data(PCA_sam)
+
+physeq_pe_CLR <- phyloseq(ASV, TAX, SAMP, fitGTR$tree)
+physeq_pe_CLR
+```
+
+```{r Prepping Distance Matrix and ADONIS Test, echo = F}
+#Generate distance matrix
+clr_dist_matrix <- phyloseq::distance(physeq_pe_CLR, method = "euclidean")
+
+#ADONIS test
+adonis_res <- vegan::adonis2(clr_dist_matrix ~ phyloseq::sample_data(physeq_pe_CLR)$Genotype)
+adonis_res
+```
+
+```{r}
+dispr <- vegan::betadisper(clr_dist_matrix, phyloseq::sample_data(physeq_pe_CLR)$Genotype)
+dispr
+```
+
+```{r}
+plot(dispr, main = "Ordination Centroids and Dispersion Labeled: Aitchison Distance", sub = "")
+```
+
+```{r}
+boxplot(dispr, main = "", xlab = "")
+```
+
+```{r Significance test for temperature, echo = F}
+permutest(dispr)
+```
+
+So what i get is 
+- Significant permutest -> there is a significant difference in point dispersion between ambient and STHS. 
+- Significant PERMANOVA -> there is significant difference in composition between ambient and STHS. 
+
+Due to significant permutest, this indicates that the significant PERMANOVA could be due to 
+- differences in the centroid position between the two groups 
+- differences in point dispersion. 
+
+Links to Useful PERMANOVA and betadisper
+https://stats.stackexchange.com/questions/314184/betadisper-is-significant-can-i-still-do-adonis-and-anosim
+https://www.researchgate.net/post/Betadisper_and_adonis_in_R_Am_I_interpreting_my_output_correctly
+https://www.researchgate.net/post/PERMANOVA-was-not-significant-but-PERMUTEST-was-significant-What-does-that-mean
+
+But, with some more reading
+*IF* the study has a balanced design (which I do, ambient and STHS have equal number of samples) then the heterogenity is fine. So maybe mine is okay?
+
+I am very confuddled. 
+
+#### Beta Testing with Stephs Stats
+
+```{r physeq CLR transformed object made earlier, include = F}
+physeq_pe_CLR
+```
+
+```{r distance of the CLR transformed counts, include = F}
+dis_clr <- vegdist(otu_table(t(physeq_pe_CLR)), method ="euclidean")
+```
+
+```{r pairwise within groups testing, echo = F}
+mod_clr <- betadisper(dis_clr, sample_data(physeq_pe_CLR)$Genotype)
+permutest(mod_clr, permutations = how(nperm=999))
+#TukeyHSD(mod_clr)
+boxplot(mod_clr)
+```
+
+```{r between group differences}
+ps_clr_meta <- as(sample_data(physeq_pe_10), "data.frame")
+adonis2(dis_clr ~ Genotype, 
+       data = ps_clr_meta, permutations = 999, 
+         method = "euclidean")
+```
+
+```{r pairwise between group, echo = F}
+pairwise.adonis(dis_clr, ps_clr_meta$Genotype, 
+                sim.method = "euclidean",
+                p.adjust.m = "bonferroni")
+```
+
+#### Differential Abundance Analysis
+
+```{r running differential abiundance analysis with ancombc, include = F}
+pe_geno_ancom <- ancombc(
+  phyloseq = physeq_pe_10,
+  formula = "Genotype",
+  p_adj_method = "holm",
+  lib_cut = 0,
+  group = "Genotype",
+  struc_zero = F,
+  neg_lb = F,
+  tol = 1e-5,
+  max_iter = 100,
+  conserve = TRUE,
+  alpha = 0.01,
+  global = TRUE
+)
+```
+
+```{r Subsetting results to dataframes, include = F}
+as.data.frame(pe_geno_ancom$res) %>% 
+  dplyr::rename(., Beta = 1) %>% 
+  dplyr::rename(., SE = 2) %>%
+  dplyr::rename(., W = 3) %>%
+  dplyr::rename(., p_val = 4) %>%
+  dplyr::rename(., padj = 5) %>%
+  dplyr::rename(., diff_abn = 6) %>%
+  mutate(method = "ancombc") %>% 
+  rownames_to_column(var = "ASV")  %>% 
+  inner_join(edited_taxo %>% 
+               rownames_to_column(var = "ASV"), 
+             by = "ASV") %>% 
+  column_to_rownames(var = "ASV") -> pe_geno_res
+View(pe_geno_res)
+
+pe_geno_res %>% 
+  dplyr::filter(diff_abn.GenotypeCN4 %in% "TRUE" | diff_abn.GenotypeHS1 %in% "TRUE" | diff_abn.GenotypeML2 %in% "TRUE") -> pe_geno_res_DA_0.01
+View(pe_geno_res_DA_0.01)
+# write.csv(pe_geno_res_DA_0.01, 
+#           file = "~/Desktop/pegenoDA.csv")
+```
+
+```{r Checking LFC greater and less than 1 for heat, echo = F}
+pe_geno_res_DA_0.01 %>% nrow()
+pe_geno_res_DA_0.01 %>%
+  dplyr::filter(Beta >= 0) %>% nrow()
+pe_geno_res_DA_0.01 %>%
+  dplyr::filter(Beta <= 0) %>% nrow()
+```
+
+work out how to pivot longer this data frame
+```{r}
+# pe_geno_res %>% 
+#   pivot_longer(., 
+#                cols = 7:9, 
+#                names_to = )
+```
+
+```{r writing DAA results for health status, include = F}
+# pe_geno_res_DA_0.01 %>%
+#   dplyr::filter(Beta >= 1 | Beta <= -1) -> pe_geno_res_DA_0.01_LFC1
+# View(pe_geno_res_DA_0.01_LFC1)
+
+write.csv(pe_geno_res_DA_0.01 %>%
+            dplyr::filter(Beta >=1 | Beta <=-1),
+          file = "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/r_saved_files/preexposure_16s/pe_da_geno_0.01.csv")
+write.csv(pe_geno_res_DA_0.01 %>%
+            dplyr::filter(Beta >=1 | Beta <=-1),
+          file = "~/Desktop//pe_da_geno_0.01.csv")
+```
+
+```{r Heatmap prep for pre exposure and visually healthy, include = F}
+ASV_mat_CLR_t[rownames(pe_geno_res_DA_0.01),] %>% 
+  as.matrix() -> matmatnorder
+
+# Colours for the tank treatments
+data.frame(pe_tfall$Genotype) -> ccann
+colnames(ccann) <- c("Genotype")
+colcol <- list("Genotype" = c("ML2" = "#C77CFF", "CN2" = "#F8766D", "HS1" = "#00BFC4", "CN4" = "#7CAE00"))
+
+# Top annotation bar for the complex heatmap
+samname <- HeatmapAnnotation(df = ccann,
+                             which = "col",
+                             col = colcol,                        
+                             simple_anno_size = unit(0.6, "cm"),
+                             annotation_name_gp = gpar(fontsize = 10),
+                             annotation_name_side = "left")
+
+# Fill for the gene VST data
+col_fun = colorRamp2(c(-2, 0, 2), 
+                     c("dodgerblue4", "white", "red3"))
+col_fun(seq(-3, 3))
+
+# adding annotation into vsd count matrix
+edited_taxo %>%
+  rownames_to_column(var = "ASV") %>% 
+  dplyr::select(-species) %>%
+  right_join(matmatnorder %>%
+               as.data.frame() %>% 
+               rownames_to_column(var="ASV"),
+             by = "ASV") %>% 
+  column_to_rownames(var="ASV") -> matmatnorder
+#View
+
+# Changing names to a character
+matmatnorder$genus <- as.character(matmatnorder$genus)
+matmatnorder$family <- as.character(matmatnorder$family)
+
+#id_to_annot, need to have rownames when putting into complex heatmap
+hello <- rowAnnotation(foo = anno_text(matmatnorder %>% as.data.frame() %>% dplyr::select(genus)))
+```
+
+```{r Heatmap for LFC1-1 DAA pre exposure and visually healthy, fig.height=10, fig.width=8, echo = F}
+  Heatmap(
+    t(scale(
+      t(matmatnorder %>% as.data.frame() %>% dplyr::select(-c(
+        1:6
+      )))
+    )),
+    cluster_columns = T,
+    show_row_dend = F,
+    show_column_dend = T,
+    column_km = 4,
+    column_gap = unit(0.3, "cm"),
+    row_km = 4,
+    row_gap = unit(0.3, "cm"),
+    col = col_fun,
+    row_title = NULL,
+    column_title = NULL,
+    top_annotation = samname,
+    right_annotation = rowAnnotation(foo = anno_text(
+      matmatnorder$family,  gp = gpar(fontsize = 7, font = 10))), 
+    show_row_names = F, 
+    show_column_names = F,
+    column_dend_height = unit(3, "cm"))
+```
+
+
+#### Alpha Analysis
+
+```{r divnet-rs prep, include = F}
+otu_table(physeq_pe_10) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "taxa") %>%
+  write.csv(
+    .,
+    "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/divnet/DHE_pe_counts_4_divnet.csv",
+    row.names = F
+  )
+```
+
+```{r Sample data for divnet, include = F}
+all(rownames(pe_tfall) == colnames(otu_table(physeq_pe_10)))
+
+# this divent model is looking at Dtreat outcome, as PCA does not really show genet difs its fine.
+model.matrix(~ Genotype - 1, pe_tfall) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "sample") %>%
+  write.csv(.,
+            file = "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/divnet/DHE_pe_geno_samples_4_divnet.csv",
+            row.names = F)
+```
+
+```{bash divnet in rust, include = F}
+# divnet-rs /Users/benjamin.d.young/Documents/projects/DHE/manuscript/divnet/DHE_divnet_pe_geno.toml
+```
+
+```{r Reading in Divnet RS, include = F}
+divnet_rs <- read.table("/Users/benjamin.d.young/Documents/projects/DHE/manuscript/divnet/DHE_pe_geno_divout.csv", 
+                        sep = ",",
+                        header = TRUE)
+# View(divnet_rs)
+
+nreplicates <- 5
+# Replicate 0 is actually the estimates for the real data.
+rep0 <- divnet_rs[divnet_rs$replicate == 0, -1]
+rownames(rep0) <- rep0$sample
+rep0$sample <- NULL
+#View(divnet_rs)
+```
+
+```{r Making the Shannon and Simpson results for actual Data, include =F}
+rep0_shannon <- apply(rep0, 1, DivNet::shannon_true)
+rep0_simpson <- apply(rep0, 1, DivNet::simpson_true)
+```
+
+```{r Shannon and Simspon for the Replicates, include = F}
+# Now calculate the shannon index for the replicates.
+reps_shannon <- sapply(1:nreplicates, function (i) {
+  d <- divnet_rs[divnet_rs$replicate == i, -1]
+  rownames(d) <- d$sample
+  d$sample <- NULL
+  apply(d, 1, DivNet::shannon_true)
+})
+
+reps_simpson <- sapply(1:nreplicates, function (i) {
+  d <- divnet_rs[divnet_rs$replicate == i, -1]
+  rownames(d) <- d$sample
+  d$sample <- NULL
+
+  apply(d, 1, DivNet::simpson_true)
+})
+```
+
+```{r Shannon and Simpson Diversity Estimates for replicates, include = F}
+# What we want is the variance in the diversity estimates for the replicates.
+reps_shannon_error <- t(apply(reps_shannon, 1, function (x) {
+  c(var(x), sd(x))
+}))
+colnames(reps_shannon_error) <- c("variance", "sd")
+
+# What we want is the variance in the diversity estimates for the replicates.
+reps_simpson_error <- t(apply(reps_simpson, 1, function (x) {
+  c(var(x), sd(x))
+}))
+colnames(reps_simpson_error) <- c("variance", "sd")
+```
+
+```{r Making nice dataframes so we can group and make nice plots, echo=T}
+tibble(names = names(rep0_shannon),
+       shannon = rep0_shannon) %>%
+  left_join(reps_shannon_error %>%
+              as.data.frame %>%
+              rownames_to_column("names")) %>%
+  mutate(ciupper = shannon + 2 * sd,
+         cilower = shannon - 2 * sd) %>% 
+  filter(names %in% rownames(pe_tfall)) %>% 
+  inner_join(pe_tfall %>% 
+              rownames_to_column(var = "names")) %>% 
+  column_to_rownames(var = "names") -> alpha_shannon_treat
+
+tibble(names = names(rep0_simpson),
+       simpson = rep0_simpson) %>%
+  left_join(reps_simpson_error %>%
+              as.data.frame %>%
+              rownames_to_column("names")) %>%
+  mutate(ciupper = simpson + 2 * sd,
+         cilower = simpson - 2 * sd) %>%
+  inner_join(pe_tfall %>% 
+              rownames_to_column(var = "names")) %>%
+  column_to_rownames(var = "names") -> alpha_simpson_treat
+
+# View(alpha_shannon_treat)
+# View(alpha_simpson_treat)
+```
+
+```{r writing alpha analysis to file, include = F}
+# write.csv(alpha_simpson_treat, 
+#           file = "/Users/benyoung/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/manuscript/r_saved_files/inoc_info/simp.csv")
+# 
+# write.csv(alpha_shannon_treat, 
+#           file = "/Users/benyoung/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/manuscript/r_saved_files/inoc_info/shan.csv")
+```
+
+
+##### Simspon
+
+```{r SIMPSON PLOTTING tank treatment, echo = T, fig.width=5, fig.height=6}
+ggplot(data = alpha_simpson_treat %>% rownames_to_column(var = "samples"), 
+       aes(x = Genotype, y = simpson, color = Genotype, group = Genotype)) + 
+  geom_point(position = position_dodge(width=0.5), 
+             size = 2) + 
+  geom_linerange(aes(ymin = cilower, ymax = ciupper), 
+                 position = position_dodge(.5), 
+                 size = 1) + 
+  theme_bw() + 
+  scale_color_manual(values = c("wheat3", "navy" ,"springgreen3", "grey60"))
+
+# tibble(names = names(rep0_simpson),
+#        simpson = rep0_simpson) %>%
+#   left_join(reps_simpson_error %>%
+#               as.data.frame %>%
+#               rownames_to_column("names")) %>%
+#   mutate(ciupper = simpson + 2 * sd,
+#          cilower = simpson - 2 * sd) %>%
+#   ggplot(aes(x = names, color = alpha_simpson_treat$Tank_treatment)) +
+#   geom_segment(aes(xend = names, y = cilower, yend = ciupper)) +
+#   geom_point(aes(y = simpson)) +
+#   xlab("samples") +
+#   ylab("simpson estimate") +
+#   ggtitle("divnet-rs") +
+#   theme_bw() + 
+#   theme(panel.grid.minor.x = element_blank(),
+#         axis.text.x = ggplot2::element_text(angle = 45, hjust = 1)) + 
+#   theme_bw()
+```
+
+```{r releveling TT so ambient is base for simpson, include = F}
+alpha_simpson_treat %>%
+  mutate(ml2 = relevel(factor(Genotype), ref = "ML2"), 
+         cn2 = relevel(factor(Genotype), ref = "CN2"),
+         hs1 = relevel(factor(Genotype), ref = "HS1"),
+         cn4 = relevel(factor(Genotype), ref = "ML2")) -> alpha_simpson_treat
+```
+
+```{r hypothesis testing for simpson TT, echo = F}
+# ml2 with cn2, cn4 and hs1
+pe_ml2_simpson <- betta(
+  chats = alpha_simpson_treat$simpson,
+  ses = sqrt(alpha_simpson_treat$variance),
+  X = model.matrix(~ ml2, data = alpha_simpson_treat)
+)
+
+# hs1 with cn2, cn4
+pe_hs1_simpson <- betta(
+  chats = alpha_simpson_treat$simpson,
+  ses = sqrt(alpha_simpson_treat$variance),
+  X = model.matrix(~ hs1, data = alpha_simpson_treat)
+)
+
+# cn2 with cn4
+pe_cn2_simpson <- betta(
+  chats = alpha_simpson_treat$simpson,
+  ses = sqrt(alpha_simpson_treat$variance),
+  X = model.matrix(~ cn2, data = alpha_simpson_treat)
+)
+
+pe_ml2_simpson$table
+pe_cn2_simpson$table
+pe_hs1_simpson$table
+```
+
+
+##### Shannon
+
+```{r Plots for Shannon, echo = F, fig.width=5, fig.height=6}
+ggplot(data = alpha_shannon_treat %>% rownames_to_column(var = "samples"), 
+       aes(x = Genotype, y = shannon, color = Genotype, group = Genotype)) + 
+  geom_point(position = position_dodge(width=0.5), 
+             size = 2) + 
+  geom_linerange(aes(ymin = cilower, ymax = ciupper), 
+                 position = position_dodge(.5), 
+                 size = 1) +
+  theme_bw() + 
+  scale_color_manual(values = c("wheat3", "navy" ,"springgreen3", "grey60"))
+
+# tibble(names = names(rep0_shannon),
+#        shannon = rep0_shannon) %>%
+#   left_join(reps_shannon_error %>%
+#               as.data.frame %>%
+#               rownames_to_column("names")) %>%
+#   mutate(ciupper = shannon + 2 * sd,
+#          cilower = shannon - 2 * sd) %>%
+#   ggplot(aes(x = names, color = alpha_shannon_treat$Tank_treatment)) +
+#   geom_segment(aes(xend = names, y = cilower, yend = ciupper)) +
+#   geom_point(aes(y = shannon)) +
+#   xlab("samples") +
+#   ylab("shannon estimate") +
+#   ggtitle("divnet-rs") +
+#   theme_bw() +
+#   theme(panel.grid.minor.x = element_blank(),
+#         axis.text.x = ggplot2::element_text(angle = 45, hjust = 1)) +
+#   theme_bw()
+```
+
+```{r releveling TT so ambient is base for simpson, include = F}
+alpha_shannon_treat %>%
+  mutate(ml2 = relevel(factor(Genotype), ref = "ML2"), 
+         cn2 = relevel(factor(Genotype), ref = "CN2"),
+         hs1 = relevel(factor(Genotype), ref = "HS1"),
+         cn4 = relevel(factor(Genotype), ref = "ML2")) -> alpha_shannon_treat
+```
+
+```{r hypothesis testing for simpson TT, echo = F}
+# ml2 with cn2, cn4 and hs1
+pe_ml2_shannon <- betta(
+  chats = alpha_shannon_treat$shannon,
+  ses = sqrt(alpha_shannon_treat$variance),
+  X = model.matrix(~ ml2, data = alpha_shannon_treat)
+)
+
+# hs1 with cn2, cn4
+pe_hs1_shannon <- betta(
+  chats = alpha_shannon_treat$shannon,
+  ses = sqrt(alpha_shannon_treat$variance),
+  X = model.matrix(~ hs1, data = alpha_shannon_treat)
+)
+
+# cn2 with cn4
+pe_cn2_shannon <- betta(
+  chats = alpha_shannon_treat$shannon,
+  ses = sqrt(alpha_shannon_treat$variance),
+  X = model.matrix(~ cn2, data = alpha_shannon_treat)
+)
+
+pe_ml2_shannon$table
+pe_cn2_shannon$table
+pe_hs1_shannon$table
+```
+
+
+#### Relative Abundance
+
+```{r Rel Abun Long Format Data Frame, include = F}
+physeq_pe_10 %>%
+  tax_glom(taxrank = "genus") %>% # agglomerate at family level
+  transform_sample_counts(function(x) {
+    x / sum(x)
+  }) %>% # Transform to rel. abundance
+  psmelt() %>%  # Melt to long format
+  arrange(genus) -> gen_abundance
+head(gen_abundance)
+```
+
+```{r Filtering at .01, include = F}
+gen_abundance %>%
+  dplyr::select(genus, Genotype, Abundance) %>%
+  group_by(genus, Genotype) %>%
+  dplyr::summarize(avg_abundance = mean(Abundance)) %>%
+  filter(avg_abundance > 0.01) -> filt_gen_abundance
+View(filt_gen_abundance)
+
+PCA_tax %>% 
+  as.data.frame() %>%
+  dplyr::select(phylum, class, order, genus) %>% 
+  distinct() %>% 
+  inner_join(filt_gen_abundance) %>%
+              as.data.frame() -> filt_gen_abundance
+View(filt_gen_abundance)
+```
+
+```{r}
+ggplot(filt_gen_abundance) +
+  geom_col(
+    mapping = aes(x = Genotype, y = avg_abundance, fill = genus),
+    position = "fill",
+    show.legend = TRUE,
+    color = "black"
+  ) +
+  ylab("Proportion of Community") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    title = element_text(size = 10)
+  )
+```
+
+```{r Creating Plot, echo = F, fig.height=9, fig.width=8}
+library(RColorBrewer)
+library(randomcoloR)
+
+# ggplot(filt_gen_abundance) +
+#   geom_col(
+#     mapping = aes(x = Genotype, y = avg_abundance, fill = genus),
+#     position = "fill",
+#     show.legend = TRUE, 
+#     color = "black"
+#   ) +
+#   ylab("Proportion of Community") +
+#   xlab(NULL) +
+#   theme_minimal() +
+#   theme(
+#     axis.text.y.left = element_text(size = 10),
+#     axis.text.x = element_text(size = 10),
+#     axis.title.y = element_text(size = 10),
+#     title = element_text(size = 10)
+#   ) + 
+#   scale_fill_manual(values = c("darkorchid", "darkolivegreen1", "lightskyblue", "darkgreen", "deeppink", "khaki2", "firebrick", "brown1", "darkorange1", "cyan1", "royalblue4", "darksalmon", "darkblue", "royalblue4", "dodgerblue3", "steelblue1", "lightskyblue", "darkseagreen", "darkgoldenrod1", "darkseagreen", "darkorchid", "darkolivegreen1", "brown1", "darkorange1", "cyan1", "darkgrey"))
+# #  scale_x_discrete(guide = guide_axis(n.dodge = 2))
+#   
+# ggplot(filt_gen_abundance) +
+#   geom_col(
+#     mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus),
+#     position = "fill",
+#     show.legend = TRUE, 
+#     color = "black"
+#   ) +
+#   ylab("Proportion of Community") +
+#   xlab(NULL) +
+#   theme_minimal() +
+#   theme(
+#     axis.text.y.left = element_text(size = 10),
+#     axis.text.x = element_text(size = 10),
+#     axis.title.y = element_text(size = 10),
+#     title = element_text(size = 10)
+#   ) + 
+#   scale_fill_manual(values = colorRampPalette(brewer.pal(11, "Dark2"))(25))
+
+set.seed(12)
+ggplot(filt_gen_abundance) +
+  geom_col(
+    mapping = aes(x = Genotype, y = avg_abundance, fill = genus),
+    position = "fill",
+    show.legend = TRUE, 
+    color = "black"
+  ) +
+  ylab("Proportion of Community") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    title = element_text(size = 10)
+  ) + 
+  scale_fill_manual(values = distinctColorPalette(25))
+```
+
+```{r Filtering at .01, include = F}
+gen_abundance %>%
+  dplyr::select(genus, Tank_treatment, Genotype, Abundance) %>%
+  group_by(genus, Genotype, Tank_treatment) %>%
+  dplyr::summarize(avg_abundance = mean(Abundance)) %>%
+  filter(avg_abundance > 0.01) -> filt_gen_abundance
+View(filt_gen_abundance)
+
+PCA_tax %>% 
+  as.data.frame() %>%
+  dplyr::select(phylum, class, order, genus) %>% 
+  distinct() %>% 
+  inner_join(filt_gen_abundance) %>%
+              as.data.frame() -> filt_gen_abundance
+View(filt_gen_abundance)
+```
+
+```{r}
+ggplot(filt_gen_abundance) +
+  geom_col(
+    mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus, group = Genotype),
+    position = "fill",
+    show.legend = TRUE,
+    color = "black"
+  ) +
+  ylab("Proportion of Community") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    title = element_text(size = 10)
+  ) + 
+  facet_wrap(~ Genotype)
+# write.csv(filt_gen_abundance, 
+#           file = "~/Desktop/filtgenetabun.csv")
+```
+
+```{r Creating Plot, echo = F, fig.height=9, fig.width=8}
+library(RColorBrewer)
+library(randomcoloR)
+
+# ggplot(filt_gen_abundance) +
+#   geom_col(
+#     mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus),
+#     position = "fill",
+#     show.legend = TRUE, 
+#     color = "black"
+#   ) +
+#   ylab("Proportion of Community") +
+#   xlab(NULL) +
+#   theme_minimal() +
+#   theme(
+#     axis.text.y.left = element_text(size = 10),
+#     axis.text.x = element_text(size = 10),
+#     axis.title.y = element_text(size = 10),
+#     title = element_text(size = 10)
+#   ) + 
+#   scale_fill_manual(values = c("darkorchid", "darkolivegreen1", "lightskyblue", "darkgreen", "deeppink", "khaki2", "firebrick", "brown1", "darkorange1", "cyan1", "royalblue4", "darksalmon", "darkblue", "royalblue4", "dodgerblue3", "steelblue1", "lightskyblue", "darkseagreen", "darkgoldenrod1", "darkseagreen", "darkorchid", "darkolivegreen1", "brown1", "darkorange1", "cyan1", "darkgrey")) + 
+#   facet_wrap(~ Genotype)
+# #  scale_x_discrete(guide = guide_axis(n.dodge = 2))
+#   
+# ggplot(filt_gen_abundance) +
+#   geom_col(
+#     mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus),
+#     position = "fill",
+#     show.legend = TRUE, 
+#     color = "black"
+#   ) +
+#   ylab("Proportion of Community") +
+#   xlab(NULL) +
+#   theme_minimal() +
+#   theme(
+#     axis.text.y.left = element_text(size = 10),
+#     axis.text.x = element_text(size = 10),
+#     axis.title.y = element_text(size = 10),
+#     title = element_text(size = 10)
+#   ) + 
+#   scale_fill_manual(values = colorRampPalette(brewer.pal(11, "Dark2"))(33)) + 
+#   facet_wrap(~ Genotype)
+
+set.seed(13)
+ggplot(filt_gen_abundance) +
+  geom_col(
+    mapping = aes(x = Tank_treatment, y = avg_abundance, fill = genus),
+    position = "fill",
+    show.legend = TRUE, 
+    color = "black"
+  ) +
+  ylab("Proportion of Community") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y.left = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    title = element_text(size = 10)
+  ) + 
+  scale_fill_manual(values = distinctColorPalette(33)) + 
+  facet_wrap(~ Genotype)
+```
+
+
+#### Core Microbiome Analysis
+
+https://www.pnas.org/doi/10.1073/pnas.2104429118#:~:text=Data%20Availability-,Abstract,host%20or%20environment%20of%20interest. 
+
+Microbiome Package vignette
+https://microbiome.github.io/tutorials/
+
+Core microbiome vignette
+https://microbiome.github.io/tutorials/Core.html
+
+
+##### All Pre Exposure Samples
+
+```{r calculating compositonal version of data, include = F}
+pseq.rel <- microbiome::transform(physeq_main_10, "compositional")
+```
+
+```{r}
+head(prevalence(pseq.rel, detection = 1/100, sort = TRUE))
+```
+
+```{r}
+core.taxa.standard <- core_members(pseq.rel, detection = 0.0001, prevalence = 50/100)
+length(core.taxa.standard)
+core.taxa.standard %>% 
+  as.data.frame() %>% 
+  dplyr::rename(., ASV_number = .) %>% 
+  inner_join(edited_taxo %>% 
+               rownames_to_column(var = "ASV_number")) -> pe_core_taxa_annotated
+# View(pe_core_taxa_annotated)
+
+tax_table(pseq.rel) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "ASV_number") %>% 
+  dplyr::filter(ASV_number %in% core.taxa.standard) -> core_annotated
+View(core_annotated)
+# write.csv(core_annotated, 
+#           file = "~/Desktop/core_annotated.csv")
+```
+
+```{r}
+plot_core(pseq.rel, 
+          prevalences = seq(.05, 1, 0.5), 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100)
+```
+
+```{r}
+# Core with compositionals:
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(1e-2), log10(.2), length = 10), 3)
+
+#Deletes "ASV" from taxa_names, e.g. ASV1 --> 1
+#taxa_names(ps.m3.rel) = taxa_names(ps.m3.rel) %>% str_replace("ASV", "")
+# Also define gray color palette
+gray <- gray(seq(0,1,length=5))
+library(viridis)
+taxa_names(pseq.rel)
+p1 <- plot_core(pseq.rel,
+  plot.type = "heatmap", 
+  colours = gray,
+  prevalences = prevalences,
+  detections = detections, min.prevalence = .1) +
+  xlab("Detection Threshold (Relative Abundance (%))")
+
+p1 <- p1 + theme_bw() + ylab("ASVs")
+p1 + scale_fill_viridis()
+```
+
+```{r}
+ps.m3.rel.gen <- aggregate_taxa(pseq.rel , "family")
+
+# Check if any taxa with no genus classification. aggregate_taxa will merge all unclassified to Unknown
+any(taxa_names(ps.m3.rel.gen) == "Unknown")
+
+# Remove Unknown
+ps.m3.rel.gen <- subset_taxa(ps.m3.rel.gen, family!="Unknown")
+
+
+detection = 0.0001
+prevalence = 50/100
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(1e-5), log10(.2), length = 10), 3)
+
+p1 <- plot_core(ps.m3.rel.gen, 
+                plot.type = "heatmap", 
+                colours = rev(brewer.pal(5, "RdBu")),
+                prevalences = prevalences, 
+                detections = detections, min.prevalence = .5) +
+    xlab("Detection Threshold (Relative Abundance (%))")
+p1 <- p1 + theme_bw() + ylab("ASVs")
+p1
+```
+
+
+```{r Heatmap prep for pre exposure and visually healthy, include = F}
+ASV_mat_CLR_t[pe_core_taxa_annotated$ASV_number,] %>% 
+  as.matrix() -> matmatnorder
+
+# Colours for the tank treatments
+data.frame(pe_tfall$Genotype) -> ccann
+colnames(ccann) <- c("Genotype")
+colcol <- list("Genotype" = c("ML2" = "grey60", "CN2" = "wheat3", "HS1" = "springgreen3", "CN4" = "navy"))
+
+# Top annotation bar for the complex heatmap
+samname <- HeatmapAnnotation(df = ccann,
+                             which = "col",
+                             col = colcol,                        
+                             simple_anno_size = unit(0.6, "cm"),
+                             annotation_name_gp = gpar(fontsize = 10),
+                             annotation_name_side = "left")
+
+# Fill for the gene VST data
+col_fun = colorRamp2(c(-2, 0, 2), 
+                     c("dodgerblue4", "white", "red3"))
+col_fun(seq(-3, 3))
+
+# adding annotation into vsd count matrix
+edited_taxo %>%
+  rownames_to_column(var = "ASV") %>% 
+  dplyr::select(-species) %>%
+  right_join(matmatnorder %>%
+               as.data.frame() %>% 
+               rownames_to_column(var="ASV"),
+             by = "ASV") %>% 
+  column_to_rownames(var="ASV") -> matmatnorder
+#View
+
+# Changing names to a character
+matmatnorder$genus <- as.character(matmatnorder$genus)
+matmatnorder$family <- as.character(matmatnorder$family)
+
+#id_to_annot, need to have rownames when putting into complex heatmap
+hello <- rowAnnotation(foo = anno_text(matmatnorder %>% as.data.frame() %>% dplyr::select(genus)))
+```
+
+```{r Heatmap for LFC1-1 DAA pre exposure and visually healthy, fig.height=10, fig.width=8, echo = F}
+  Heatmap(
+    t(scale(
+      t(matmatnorder %>% as.data.frame() %>% dplyr::select(-c(
+        1:6
+      )))
+    )),
+    cluster_columns = T,
+    show_row_dend = F,
+    show_column_dend = T,
+    column_km = 4,
+    column_gap = unit(0.3, "cm"),
+    row_km = 4,
+    row_gap = unit(0.3, "cm"),
+    col = col_fun,
+    row_title = NULL,
+    column_title = NULL,
+    top_annotation = samname,
+    right_annotation = rowAnnotation(foo = anno_text(
+      matmatnorder$family,  gp = gpar(fontsize = 7, font = 10))), 
+    show_row_names = F, 
+    show_column_names = F,
+    column_dend_height = unit(3, "cm"))
+```
+
+
+##### Genet ML2
+
+```{r}
+physeq_pe_ml2 <- subset_samples(physeq_pe_10, Genotype %in% c("ML2"))
+physeq_pe_ml2
+```
+
+```{r calculating compositonal version of data, include = F}
+pseq.rel_ml2 <- microbiome::transform(physeq_pe_ml2, "compositional")
+```
+
+```{r}
+head(prevalence(pseq.rel_ml2, detection = 1/100, sort = TRUE))
+```
+
+```{r}
+core.taxa.standard.ml2 <- core_members(pseq.rel_ml2, detection = 0.0001, prevalence = 50/100)
+length(core.taxa.standard.ml2)
+core.taxa.standard.ml2 %>% 
+  as.data.frame() %>% 
+  dplyr::rename(., ASV_number = .) %>% 
+  inner_join(edited_taxo %>% 
+               rownames_to_column(var = "ASV_number")) -> pe_core_taxa_annotated_ml2
+# View(pe_core_taxa_annotated_ml2)
+```
+
+```{r}
+plot_core(pseq.rel_ml2, 
+          prevalences = seq(.05, 1, 0.5), 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100)
+```
+
+```{r}
+# Core with compositionals:
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(1e-2), log10(.2), length = 10), 3)
+
+#Deletes "ASV" from taxa_names, e.g. ASV1 --> 1
+#taxa_names(ps.m3.rel) = taxa_names(ps.m3.rel) %>% str_replace("ASV", "")
+# Also define gray color palette
+gray <- gray(seq(0,1,length=5))
+
+p1 <- plot_core(pseq.rel_ml2,
+  plot.type = "heatmap", 
+  colours = gray,
+  prevalences = prevalences,
+  detections = detections, min.prevalence = .1) +
+  xlab("Detection Threshold (Relative Abundance (%))")
+
+p1 <- p1 + theme_bw() + ylab("ASVs")
+p1
+```
+
+##### Genet CN2
+
+```{r}
+physeq_pe_cn2 <- subset_samples(physeq_pe_10, Genotype %in% c("CN2"))
+physeq_pe_cn2
+```
+
+```{r calculating compositonal version of data, include = F}
+pseq.rel_cn2 <- microbiome::transform(physeq_pe_cn2, "compositional")
+```
+
+```{r}
+head(prevalence(pseq.rel_cn2, detection = 1/100, sort = TRUE))
+```
+
+```{r}
+core.taxa.standard.cn2 <- core_members(pseq.rel_cn2, detection = 0.0001, prevalence = 50/100)
+length(core.taxa.standard.cn2)
+core.taxa.standard.cn2 %>% 
+  as.data.frame() %>% 
+  dplyr::rename(., ASV_number = .) %>% 
+  inner_join(edited_taxo %>% 
+               rownames_to_column(var = "ASV_number")) -> pe_core_taxa_annotated_cn2
+# View(pe_core_taxa_annotated_cn2)
+```
+
+```{r}
+plot_core(pseq.rel_cn2, 
+          prevalences = seq(.05, 1, 0.5), 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100)
+```
+
+```{r}
+# Core with compositionals:
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(1e-2), log10(.2), length = 10), 3)
+
+#Deletes "ASV" from taxa_names, e.g. ASV1 --> 1
+#taxa_names(ps.m3.rel) = taxa_names(ps.m3.rel) %>% str_replace("ASV", "")
+# Also define gray color palette
+gray <- gray(seq(0,1,length=5))
+
+p1 <- plot_core(pseq.rel_cn2,
+  plot.type = "heatmap", 
+  colours = gray,
+  prevalences = prevalences,
+  detections = detections, min.prevalence = .1) +
+  xlab("Detection Threshold (Relative Abundance (%))")
+
+p1 <- p1 + theme_bw() + ylab("ASVs")
+p1
+```
+
+
+##### Genet CN4
+
+```{r}
+physeq_pe_cn4 <- subset_samples(physeq_pe_10, Genotype %in% c("CN4"))
+physeq_pe_cn4
+```
+
+```{r calculating compositonal version of data, include = F}
+pseq.rel_cn4 <- microbiome::transform(physeq_pe_cn4, "compositional")
+```
+
+```{r}
+head(prevalence(pseq.rel_cn4, detection = 1/100, sort = TRUE))
+```
+
+```{r}
+core.taxa.standard.cn4 <- core_members(pseq.rel_cn4, detection = 0.0001, prevalence = 50/100)
+length(core.taxa.standard.cn4)
+core.taxa.standard.cn4 %>% 
+  as.data.frame() %>% 
+  dplyr::rename(., ASV_number = .) %>% 
+  inner_join(edited_taxo %>% 
+               rownames_to_column(var = "ASV_number")) -> pe_core_taxa_annotated_cn4
+# View(pe_core_taxa_annotated_cn4)
+```
+
+```{r}
+plot_core(pseq.rel_cn4, 
+          prevalences = seq(.05, 1, 0.5), 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100)
+```
+
+```{r}
+# Core with compositionals:
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(1e-2), log10(.2), length = 10), 3)
+
+#Deletes "ASV" from taxa_names, e.g. ASV1 --> 1
+#taxa_names(ps.m3.rel) = taxa_names(ps.m3.rel) %>% str_replace("ASV", "")
+# Also define gray color palette
+gray <- gray(seq(0,1,length=5))
+
+p1 <- plot_core(pseq.rel_cn4,
+  plot.type = "heatmap", 
+  colours = gray,
+  prevalences = prevalences,
+  detections = detections, min.prevalence = .1) +
+  xlab("Detection Threshold (Relative Abundance (%))")
+
+p1 <- p1 + theme_bw() + ylab("ASVs")
+p1
+```
+
+
+##### Genet HS1
+
+```{r}
+physeq_pe_hs1 <- subset_samples(physeq_pe_10, Genotype %in% c("HS1"))
+physeq_pe_hs1
+```
+
+```{r calculating compositonal version of data, include = F}
+pseq.rel_hs1 <- microbiome::transform(physeq_pe_hs1, "compositional")
+```
+
+```{r}
+head(prevalence(pseq.rel_hs1, detection = 1/100, sort = TRUE))
+```
+
+```{r}
+core.taxa.standard.hs1 <- core_members(pseq.rel_hs1, detection = 0.0001, prevalence = 50/100)
+length(core.taxa.standard.hs1)
+core.taxa.standard.hs1 %>% 
+  as.data.frame() %>% 
+  dplyr::rename(., ASV_number = .) %>% 
+  inner_join(edited_taxo %>% 
+               rownames_to_column(var = "ASV_number")) -> pe_core_taxa_annotated_hs1
+# View(pe_core_taxa_annotated_hs1)
+```
+
+```{r}
+plot_core(pseq.rel_hs1, 
+          prevalences = seq(.05, 1, 0.5), 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100)
+```
+
+```{r}
+# Core with compositionals:
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(1e-2), log10(.2), length = 10), 3)
+
+#Deletes "ASV" from taxa_names, e.g. ASV1 --> 1
+#taxa_names(ps.m3.rel) = taxa_names(ps.m3.rel) %>% str_replace("ASV", "")
+# Also define gray color palette
+gray <- gray(seq(0,1,length=5))
+
+p1 <- plot_core(pseq.rel_hs1,
+  plot.type = "heatmap", 
+  colours = gray,
+  prevalences = prevalences,
+  detections = detections, min.prevalence = .1) +
+  xlab("Detection Threshold (Relative Abundance (%))")
+
+p1 <- p1 + theme_bw() + ylab("ASVs")
+p1
+```
+
+
+##### Intersect of INdividual Genet Core Microbiome Analysis
+
+```{r}
+venn(list(pe_core_taxa_annotated_cn2$ASV_number, pe_core_taxa_annotated_cn4$ASV_number, 
+          pe_core_taxa_annotated_hs1$ASV_number, pe_core_taxa_annotated_ml2$ASV_number))
+
+intersect(pe_core_taxa_annotated_cn2$ASV_number, pe_core_taxa_annotated_cn4$ASV_number) %>% 
+  intersect(., pe_core_taxa_annotated_hs1$ASV_number) %>% 
+  intersect(., pe_core_taxa_annotated_ml2$ASV_number) %>% 
+  as.data.frame() %>%
+  dplyr::rename(ASV_number = 1) %>% 
+  inner_join(edited_taxo %>% 
+               rownames_to_column(var = "ASV_number")) -> intersect_genet_coremb
+```
+
+```{r}
+venn(list(core_annotated$ASV_number, intersect_genet_coremb$ASV_number)) %>% View()
+```
+
+
+
+
+
+## Disease Inoculated Samples
+
+This is for one analysis 
+a) Short term heat stress
+
+
+For both the initial prep and phyloseq creation is the same. 
+
+```{r making data tables for just the pre exposure samples, include = F}
+tfall_coral %>% 
+  dplyr::filter(!basic_health %in% "pre_exposure") -> di_tfall
+
+DHE_counts_coral %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "sample_ID") %>% 
+  dplyr::filter(sample_ID %in% rownames(di_tfall)) %>% 
+  column_to_rownames(var = "sample_ID") %>% 
+  t() %>% 
+  as.data.frame() -> di_counts
+```
+
+```{r making phyloseq object with filtering, include = F}
+DHE_taxo_mat <- as.matrix(edited_taxo)
+
+PCA_asv <- as.matrix(di_counts)
+PCA_tax <- DHE_taxo_mat
+PCA_sam <- di_tfall
+
+ASV <- otu_table(PCA_asv, taxa_are_rows = T)
+TAX <- tax_table(PCA_tax)
+SAMP <- sample_data(PCA_sam)
+
+physeq_di <- phyloseq(ASV, TAX, SAMP, fitGTR$tree)
+physeq_di
+```
+
+```{r removing singletons and zeros from physeq object, echo = F}
+prune_taxa(taxa_sums(physeq_di) > 0, physeq_di) %>% 
+  prune_taxa(taxa_sums(.) > 1, .) -> physeq_di_sing_zero_rem
+physeq_di_sing_zero_rem
+```
+
+```{r additional filtering out of ASVs with less than 7 across all samples , include= = F}
+physeq_di_sing_zero_rem
+physeq_di_10 <- prune_taxa(taxa_sums(physeq_di_sing_zero_rem) > 10, physeq_di_sing_zero_rem)
+physeq_di_10       
+
+ntaxa(physeq_di)
+ntaxa(physeq_di_sing_zero_rem)
+ntaxa(physeq_di_10)
+
+length(get_taxa_unique(physeq_di, "genus")) # 548
+length(get_taxa_unique(physeq_di_sing_zero_rem, "genus")) #345
+length(get_taxa_unique(physeq_di_10, "genus")) #279
+```
+
+
+### Short Term Heat Stress Analysis for Disease Inoculated Coral Samples
+#### Principal Component Analysis
+
+```{r CLR transformation and prep for principal component analysis, include = F}
+otu_table(physeq_di_10) -> ASV_mat
+cmultRepl(t(ASV_mat), 
+          method = "CZM", 
+          label = 0) -> ASV_mat
+codaSeq.clr(ASV_mat, 
+            samples.by.row = T) -> ASV_mat_CLR
+t(ASV_mat_CLR) -> ASV_mat_CLR_t
+
+allsamps <- pca(ASV_mat_CLR_t, 
+                metadata = di_tfall, 
+                removeVar = 0.1)
+```
+
+```{r Plots from PCAtools, echo = F, fig.width=9, fig.height=6}
+## Plot showing the genes which drive the principal component variances. 
+plotloadings(allsamps, labSize = 3)
+```
+
+```{r Plots from PCAtools, fig.width=6, fig.height=3}
+## Scree plot showing amount of variance explained by each PC (bars) and cumulative variance as you progress along bars (line)
+screeplot(allsamps, 
+          getComponents(allsamps, 1:15), 
+          axisLabSize = 10, 
+          titleLabSize = 10, 
+          returnPlot = T, 
+          ylim = c(0,55), 
+          vline = c(findElbowPoint(allsamps$variance))) +
+  geom_label(aes(x = findElbowPoint(allsamps$variance) + 1, y = 25,
+      label = 'Elbow method', vjust = -1, size = 4))
+```
+
+```{r PCA axes metadata significanace plot, fig.width=13, fig.height = 4}
+eigencorplot(
+  allsamps,
+  metavars = c("Tank_treatment", "Genotype", "basic_health"),
+  components = getComponents(allsamps, 1:11),
+  col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+  cexCorval = 1.2,
+  fontCorval = 2,
+  posLab = 'all',
+  rotLabX = 45,
+  scale = TRUE,
+  main = bquote(
+    Principal ~ Component ~ Pearson ~ r ^ 2 ~ metadata ~ significant ~ correlation
+  ),
+  plotRsquared = T,
+  corFUN = 'pearson',
+  corUSE = 'pairwise.complete.obs',
+  corMultipleTestCorrection = 'BH',
+  signifSymbols = c('****', '***', '**', '*', ''),
+  signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+)
+```
+
+```{r sample loadings for principal component analysis, echo = F}
+pca_samp <- prcomp(ASV_mat_CLR)
+sample_loadings <- as.data.frame(pca_samp$x)
+#summary(pca_samp)
+fviz_eig(pca_samp, addlabels = TRUE, ylim = c(0, 30), )
+```
+
+```{r Percentage Loadings of PC Axis, include = F}
+pc1 <- round(pca_samp$sdev[1]^2/sum(pca_samp$sdev^2),2) * 100
+pc2 <- round(pca_samp$sdev[2]^2/sum(pca_samp$sdev^2),2) * 100
+pc3 <- round(pca_samp$sdev[3]^2/sum(pca_samp$sdev^2),2) * 100
+pc4 <- round(pca_samp$sdev[4]^2/sum(pca_samp$sdev^2),2) * 100
+pc5 <- round(pca_samp$sdev[5]^2/sum(pca_samp$sdev^2),2) * 100
+```
+
+```{r PCA Timepoint, echo = F}
+ggplot(
+  sample_loadings, aes(PC1, PC2, color = PCA_sam$Tank_treatment, shape = PCA_sam$basic_health)) +
+  geom_point(size = 2) +
+  labs(
+    x = paste("PC1: ", pc1, "% variance", sep = ""),
+    y = paste("PC2: ", pc2, "% variance", sep = "")
+  ) +
+  theme(
+    text = element_text(size = 12, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 9)
+  ) + 
+  theme(legend.key.size = unit(0.8, "cm")) +
+  stat_ellipse(aes(PC1, PC2, group = PCA_sam$Tank_treatment), type = "norm") +
+  scale_color_manual(name = "Temperature Treatment",
+                     values = c("blue3", "orangered2"))
+
+ggplot(sample_loadings, aes(PC2, PC3, color = PCA_sam$Tank_treatment)) +
+  geom_point(size = 2) +
+  labs(x = paste("PC2: ", pc2, "% variance", sep = ""),
+       y = paste("PC3: ", pc3, "% variance", sep = "")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  ) +
+  stat_ellipse() +
+    scale_color_manual(name = "Temperature Treatment",
+                     values = c("blue3", "orangered2"))
+
+ggplot(sample_loadings, aes(PC3, PC4, color = PCA_sam$Tank_treatment)) +
+  geom_point(size = 2) +
+  labs(x = paste("PC3: ", pc3, "% variance", sep = ""),
+       y = paste("PC4: ", pc4, "% variance", sep = "")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  ) +
+  stat_ellipse() +
+    scale_color_manual(name = "Temperature Treatment",
+                     values = c("blue3", "orangered2"))
+
+ggplot(sample_loadings, aes(PC4, PC5, color = PCA_sam$Tank_treatment)) +
+  geom_point(size = 2) +
+  labs(x = paste("PC4: ", pc4, "% variance", sep = ""),
+       y = paste("PC5: ", pc5, "% variance", sep = "")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  ) +
+  stat_ellipse() +
+    scale_color_manual(name = "Temperature Treatment",
+                     values = c("blue3", "orangered2"))
+```
+
+#### Beta Significance Testing Online
+
+Okay so this is all new to me but here is what I am thinking from looking at other peoples github repos and analysis
+1. ANOSIM
+- test whether distances BETWEEN groups are greater than WITHIN groups.
+- vegan::
+
+2. PERMANOVA
+- Tests Differences between groups
+- vegan::adonis2
+
+3. Dispersion 
+- Differences in dispersion or spread of the treatments. 
+- vegan::permutest
+
+
+#### PERMANOVA Analysis for Short Term Heat Stress
+
+https://www.nicholas-ollberding.com/post/introduction-to-the-statistical-analysis-of-microbiome-data-in-r/
+
+```{r CLR transformed phyloseq pbject for permanova, include = F}
+ASV <- otu_table(ASV_mat_CLR_t, taxa_are_rows = T)
+TAX <- tax_table(PCA_tax)
+SAMP <- sample_data(PCA_sam)
+
+physeq_di_CLR <- phyloseq(ASV, TAX, SAMP, fitGTR$tree)
+physeq_di_CLR
+```
+
+```{r Prepping Distance Matrix and ADONIS Test, echo = F}
+#Generate distance matrix
+clr_dist_matrix <- phyloseq::distance(physeq_di_CLR, method = "euclidean")
+
+#ADONIS test
+adonis_res <- vegan::adonis2(clr_dist_matrix ~ phyloseq::sample_data(physeq_di_CLR)$Tank_treatment)
+adonis_res
+```
+
+```{r}
+dispr <- vegan::betadisper(clr_dist_matrix, phyloseq::sample_data(physeq_di_CLR)$Tank_treatment)
+dispr
+```
+
+```{r}
+plot(dispr, main = "Ordination Centroids and Dispersion Labeled: Aitchison Distance", sub = "")
+```
+
+```{r}
+boxplot(dispr, main = "", xlab = "")
+```
+
+```{r Significance test for temperature, echo = F}
+permutest(dispr)
+```
+
+So what i get is 
+- Significant permutest -> there is a significant difference in point dispersion between ambient and STHS. 
+- Significant PERMANOVA -> there is significant difference in composition between ambient and STHS. 
+
+Due to significant permutest, this indicates that the significant PERMANOVA could be due to 
+- differences in the centroid position between the two groups 
+- differences in point dispersion. 
+
+Links to Useful PERMANOVA and betadisper
+https://stats.stackexchange.com/questions/314184/betadisper-is-significant-can-i-still-do-adonis-and-anosim
+https://www.researchgate.net/post/Betadisper_and_adonis_in_R_Am_I_interpreting_my_output_correctly
+https://www.researchgate.net/post/PERMANOVA-was-not-significant-but-PERMUTEST-was-significant-What-does-that-mean
+
+But, with some more reading
+*IF* the study has a balanced design (which I do, ambient and STHS have equal number of samples) then the heterogenity is fine. So maybe mine is okay?
+
+I am very confuddled. 
+
+#### Beta Testing with Stephs Stats
+
+```{r physeq CLR transformed object made earlier, include = F}
+physeq_di_CLR
+```
+
+```{r distance of the CLR transformed counts, include = F}
+dis_clr <- vegdist(otu_table(t(physeq_di_CLR)), method ="euclidean")
+```
+
+```{r pairwise within groups testing, echo = F}
+mod_clr <- betadisper(dis_clr, sample_data(physeq_di_CLR)$Tank_treatment)
+permutest(mod_clr, permutations = how(nperm=999))
+#TukeyHSD(mod_clr)
+boxplot(mod_clr)
+```
+
+```{r between group differences}
+ps_clr_meta <- as(sample_data(physeq_di_10), "data.frame")
+adonis2(dis_clr ~ Tank_treatment, 
+       data = ps_clr_meta, permutations = 999, 
+         method = "euclidean")
+```
+
+```{r pairwise between group, echo = F}
+pairwise.adonis(dis_clr, ps_clr_meta$Tank_treatment, 
+                sim.method = "euclidean",
+                p.adjust.m = "bonferroni")
+```
+
+#### Differential Abundance Analysis
+
+```{r running differential abiundance analysis with ancombc, include = F}
+di_sths_ancom <- ancombc(
+  phyloseq = physeq_di_10,
+  formula = "Tank_treatment",
+  p_adj_method = "holm",
+  lib_cut = 0,
+  group = "Tank_treatment",
+  struc_zero = F,
+  neg_lb = F,
+  tol = 1e-5,
+  max_iter = 100,
+  conserve = TRUE,
+  alpha = 0.05,
+  global = TRUE
+)
+```
+
+```{r Subsetting results to dataframes, include = F}
+as.data.frame(di_sths_ancom$res) %>% 
+  dplyr::rename(., Beta = 1) %>% 
+  dplyr::rename(., SE = 2) %>%
+  dplyr::rename(., W = 3) %>%
+  dplyr::rename(., p_val = 4) %>%
+  dplyr::rename(., padj = 5) %>%
+  dplyr::rename(., diff_abn = 6) %>%
+  mutate(method = "ancombc") %>% 
+  rownames_to_column(var = "ASV")  %>% 
+  inner_join(edited_taxo %>% 
+               rownames_to_column(var = "ASV"), 
+             by = "ASV") %>% 
+  column_to_rownames(var = "ASV") -> di_sths_res
+
+di_sths_res %>% 
+  dplyr::filter(diff_abn %in% "TRUE") -> di_sths_res_DA_0.05
+View(di_sths_res_DA_0.05)
+```
+
+```{r Checking LFC greater and less than 1 for heat, echo = F}
+di_sths_res_DA_0.05 %>% nrow()
+di_sths_res_DA_0.05 %>%
+  dplyr::filter(Beta >= 0) %>% nrow()
+di_sths_res_DA_0.05 %>%
+  dplyr::filter(Beta <= 0) %>% nrow()
+```
+
+```{r writing DAA results for health status, include = F}
+# write.csv(di_sths_res_DA_0.05 %>%
+#             dplyr::filter(Beta >=1 | Beta <=-1),
+#           file = "/Users/benjamin.d.young/Documents/projects/DHE/manuscript/r_saved_files/diseaseinoculated_16s/di_da_sths_0.05.csv")
+```
+
+
+#### Core Microbiome Analysis Disease Inoculated
+
+https://www.pnas.org/doi/10.1073/pnas.2104429118#:~:text=Data%20Availability-,Abstract,host%20or%20environment%20of%20interest. 
+
+Microbiome Package vignette
+https://microbiome.github.io/tutorials/
+
+Core microbiome vignette
+https://microbiome.github.io/tutorials/Core.html
+
+##### Disease Inoculated Visuaslly Healthy Coral Samples
+
+```{r}
+physeq_vh <- subset_samples(physeq_di_10, basic_health=="visually_healthy")
+physeq_vh
+```
+
+
+```{r calculating compositonal version of data, include = F}
+pseq.rel_vh <- microbiome::transform(physeq_vh, "compositional")
+```
+
+```{r}
+head(prevalence(pseq.rel_vh, detection = 1/100, sort = TRUE))
+```
+
+```{r}
+core.taxa.standard_vh <- core_members(pseq.rel_vh, detection = 0.0001, prevalence = 50/100)
+length(core.taxa.standard_vh)
+
+core.taxa.standard_vh %>% 
+  as.data.frame() %>% 
+  dplyr::rename(., ASV_number = .) %>% 
+  inner_join(edited_taxo %>% 
+               rownames_to_column(var = "ASV_number")) -> pe_core_taxa_annotated_vh
+# View(pe_core_taxa_annotated)
+
+tax_table(pseq.rel_vh) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "ASV_number") %>% 
+  dplyr::filter(ASV_number %in% core.taxa.standard_vh) -> core_annotated_vh
+View(core_annotated_vh)
+```
+
+```{r}
+plot_core(pseq.rel_vh, 
+          prevalences = seq(.05, 1, 0.5), 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100)
+```
+
+```{r}
+# Core with compositionals:
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(1e-2), log10(.2), length = 10), 3)
+
+#Deletes "ASV" from taxa_names, e.g. ASV1 --> 1
+#taxa_names(ps.m3.rel) = taxa_names(ps.m3.rel) %>% str_replace("ASV", "")
+# Also define gray color palette
+gray <- gray(seq(0,1,length=5))
+library(viridis)
+taxa_names(pseq.rel_vh)
+p1 <- plot_core(pseq.rel_vh,
+  plot.type = "heatmap", 
+  colours = gray,
+  prevalences = prevalences,
+  detections = detections, min.prevalence = .1) +
+  xlab("Detection Threshold (Relative Abundance (%))")
+
+p1 <- p1 + theme_bw() + ylab("ASVs")
+p1 + scale_fill_viridis()
+```
+
+```{r}
+ps.m3.rel.gen <- aggregate_taxa(pseq.rel_vh , "family")
+
+# Check if any taxa with no genus classification. aggregate_taxa will merge all unclassified to Unknown
+any(taxa_names(ps.m3.rel.gen) == "Unknown")
+
+# Remove Unknown
+ps.m3.rel.gen <- subset_taxa(ps.m3.rel.gen, family!="Unknown")
+
+
+detection = 0.0001
+prevalence = 50/100
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(1e-5), log10(.2), length = 10), 3)
+
+p1 <- plot_core(ps.m3.rel.gen, 
+                plot.type = "heatmap", 
+                colours = rev(brewer.pal(5, "RdBu")),
+                prevalences = prevalences, 
+                detections = detections, min.prevalence = .5) +
+    xlab("Detection Threshold (Relative Abundance (%))")
+p1 <- p1 + theme_bw() + ylab("ASVs")
+p1
+```
+
+```{r Heatmap prep for pre exposure and visually healthy, include = F}
+ASV_mat_CLR_t[pe_core_taxa_annotated_vh$ASV_number,] %>% 
+  as.matrix() -> matmatnorder
+
+# Colours for the tank treatments
+data.frame(di_tfall$Genotype) -> ccann
+colnames(ccann) <- c("Genotype")
+colcol <- list("Genotype" = c("ML2" = "grey60", "CN2" = "wheat3", "HS1" = "springgreen3", "CN4" = "navy"))
+
+# Top annotation bar for the complex heatmap
+samname <- HeatmapAnnotation(df = ccann,
+                             which = "col",
+                             col = colcol,                        
+                             simple_anno_size = unit(0.6, "cm"),
+                             annotation_name_gp = gpar(fontsize = 10),
+                             annotation_name_side = "left")
+
+# Fill for the gene VST data
+col_fun = colorRamp2(c(-2, 0, 2), 
+                     c("dodgerblue4", "white", "red3"))
+col_fun(seq(-3, 3))
+
+# adding annotation into vsd count matrix
+edited_taxo %>%
+  rownames_to_column(var = "ASV") %>% 
+  dplyr::select(-species) %>%
+  right_join(matmatnorder %>%
+               as.data.frame() %>% 
+               rownames_to_column(var="ASV"),
+             by = "ASV") %>% 
+  column_to_rownames(var="ASV") -> matmatnorder
+#View
+
+# Changing names to a character
+matmatnorder$genus <- as.character(matmatnorder$genus)
+matmatnorder$family <- as.character(matmatnorder$family)
+
+#id_to_annot, need to have rownames when putting into complex heatmap
+hello <- rowAnnotation(foo = anno_text(matmatnorder %>% as.data.frame() %>% dplyr::select(genus)))
+```
+
+```{r Heatmap for LFC1-1 DAA pre exposure and visually healthy, fig.height=10, fig.width=8, echo = F}
+  Heatmap(
+    t(scale(
+      t(matmatnorder %>% as.data.frame() %>% dplyr::select(-c(
+        1:6
+      )))
+    )),
+    cluster_columns = T,
+    show_row_dend = F,
+    show_column_dend = T,
+    column_km = 4,
+    column_gap = unit(0.3, "cm"),
+    row_km = 4,
+    row_gap = unit(0.3, "cm"),
+    col = col_fun,
+    row_title = NULL,
+    column_title = NULL,
+    top_annotation = samname,
+    right_annotation = rowAnnotation(foo = anno_text(
+      matmatnorder$family,  gp = gpar(fontsize = 7, font = 10))), 
+    show_row_names = F, 
+    show_column_names = F,
+    column_dend_height = unit(3, "cm"))
+```
+
+
+##### Disease Inoculated Diseased Coral Samples
+
+```{r}
+physeq_d <- subset_samples(physeq_di_10, basic_health=="diseased")
+physeq_d
+```
+
+```{r calculating compositonal version of data, include = F}
+pseq.rel_d <- microbiome::transform(physeq_d, "compositional")
+```
+
+```{r}
+head(prevalence(pseq.rel_d, detection = 1/100, sort = TRUE))
+```
+
+```{r}
+core.taxa.standard_d <- core_members(pseq.rel_d, detection = 0.0001, prevalence = 50/100)
+length(core.taxa.standard_d)
+
+core.taxa.standard_d %>% 
+  as.data.frame() %>% 
+  dplyr::rename(., ASV_number = .) %>% 
+  inner_join(edited_taxo %>% 
+               rownames_to_column(var = "ASV_number")) -> pe_core_taxa_annotated_d
+# View(pe_core_taxa_annotated)
+
+tax_table(pseq.rel_d) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "ASV_number") %>% 
+  dplyr::filter(ASV_number %in% core.taxa.standard_d) -> core_annotated_d
+View(core_annotated_d)
+```
+
+```{r}
+plot_core(pseq.rel_d, 
+          prevalences = seq(.05, 1, 0.5), 
+          detections = c(0, 0.1, 0.5, 2, 5, 20)/100)
+```
+
+```{r}
+# Core with compositionals:
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(1e-2), log10(.2), length = 10), 3)
+
+#Deletes "ASV" from taxa_names, e.g. ASV1 --> 1
+#taxa_names(ps.m3.rel) = taxa_names(ps.m3.rel) %>% str_replace("ASV", "")
+# Also define gray color palette
+gray <- gray(seq(0,1,length=5))
+library(viridis)
+taxa_names(pseq.rel_d)
+p1 <- plot_core(pseq.rel_d,
+  plot.type = "heatmap", 
+  colours = gray,
+  prevalences = prevalences,
+  detections = detections, min.prevalence = .1) +
+  xlab("Detection Threshold (Relative Abundance (%))")
+
+p1 <- p1 + theme_bw() + ylab("ASVs")
+p1 + scale_fill_viridis()
+```
+
+```{r}
+ps.m3.rel.gen <- aggregate_taxa(pseq.rel_d , "family")
+
+# Check if any taxa with no genus classification. aggregate_taxa will merge all unclassified to Unknown
+any(taxa_names(ps.m3.rel.gen) == "Unknown")
+
+# Remove Unknown
+ps.m3.rel.gen <- subset_taxa(ps.m3.rel.gen, family!="Unknown")
+
+
+detection = 0.0001
+prevalence = 50/100
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(1e-5), log10(.2), length = 10), 3)
+
+p1 <- plot_core(ps.m3.rel.gen, 
+                plot.type = "heatmap", 
+                colours = rev(brewer.pal(5, "RdBu")),
+                prevalences = prevalences, 
+                detections = detections, min.prevalence = .5) +
+    xlab("Detection Threshold (Relative Abundance (%))")
+p1 <- p1 + theme_bw() + ylab("ASVs")
+p1
+```
+
+```{r Heatmap prep for pre exposure and visually healthy, include = F}
+ASV_mat_CLR_t[pe_core_taxa_annotated_d$ASV_number,] %>% 
+  as.matrix() -> matmatnorder
+
+# Colours for the tank treatments
+data.frame(di_tfall$Dtreatment) -> ccann
+colnames(ccann) <- c("Dtreatment")
+colcol <- list("Dtreatment" = c("smarcscens" = "plum1", "smplacebo" = "lightsteelblue3", "diseaseslurry" = "aquamarine3", "placeboslurry" = "gold3"))
+
+# Top annotation bar for the complex heatmap
+samname <- HeatmapAnnotation(df = ccann,
+                             which = "col",
+                             col = colcol,                        
+                             simple_anno_size = unit(0.6, "cm"),
+                             annotation_name_gp = gpar(fontsize = 10),
+                             annotation_name_side = "left")
+
+# Fill for the gene VST data
+col_fun = colorRamp2(c(-2, 0, 2), 
+                     c("dodgerblue4", "white", "red3"))
+col_fun(seq(-3, 3))
+
+# adding annotation into vsd count matrix
+edited_taxo %>%
+  rownames_to_column(var = "ASV") %>% 
+  dplyr::select(-species) %>%
+  right_join(matmatnorder %>%
+               as.data.frame() %>% 
+               rownames_to_column(var="ASV"),
+             by = "ASV") %>% 
+  column_to_rownames(var="ASV") -> matmatnorder
+#View
+
+# Changing names to a character
+matmatnorder$genus <- as.character(matmatnorder$genus)
+matmatnorder$family <- as.character(matmatnorder$family)
+
+#id_to_annot, need to have rownames when putting into complex heatmap
+hello <- rowAnnotation(foo = anno_text(matmatnorder %>% as.data.frame() %>% dplyr::select(genus)))
+```
+
+```{r Heatmap for LFC1-1 DAA pre exposure and visually healthy, fig.height=10, fig.width=8, echo = F}
+  Heatmap(
+    t(scale(
+      t(matmatnorder %>% as.data.frame() %>% dplyr::select(-c(
+        1:6
+      )))
+    )),
+    cluster_columns = T,
+    show_row_dend = F,
+    show_column_dend = T,
+    column_km = 2,
+    column_gap = unit(0.3, "cm"),
+    row_km = 2,
+    row_gap = unit(0.3, "cm"),
+    col = col_fun,
+    row_title = NULL,
+    column_title = NULL,
+    top_annotation = samname,
+    right_annotation = rowAnnotation(foo = anno_text(
+      matmatnorder$family,  gp = gpar(fontsize = 7, font = 10))), 
+    show_row_names = F, 
+    show_column_names = F,
+    column_dend_height = unit(3, "cm"))
+```

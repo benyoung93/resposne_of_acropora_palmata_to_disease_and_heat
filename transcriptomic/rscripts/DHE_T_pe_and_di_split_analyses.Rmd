@@ -1,0 +1,1067 @@
+---
+title: "DHE_T_geneexpression_preexposure_diseaseinoculated_split"
+output: html_document
+date: '2022-07-12'
+---
+
+```{r package installing chunk, include = F}
+## BiocManager::install("thacklr")
+```
+
+```{r library loading, include = F}
+library(tximport)
+library(tidyverse)
+library(DESeq2)
+library(edgeR)
+library(ggrepel)
+library(WGCNA)
+library(DEGreport)
+library(PCAtools)
+library(venn)
+library(clusterProfiler)
+library(ComplexHeatmap)
+library(circlize)
+library(ape)
+library(dendextend)
+library(enrichplot)
+library(scales)
+```
+
+```{r Data object loading, include = F}
+load("/Users/benjamin.d.young/Documents/projects/DHE/manuscript/r_data_objects/DHE_counts.RData")
+load("/Users/benjamin.d.young/Documents/projects/DHE/manuscript/r_data_objects/treatment_file.RData")
+load("/Users/benjamin.d.young/Documents/projects/DHE/manuscript/r_data_objects/annot_4_analysis.RData")
+```
+
+```{r PCA axes modified functions loading, include = F}
+load("/Users/benjamin.d.young/Documents/projects/bioinformatc_resources/pca_axes_saves/pca23.RData")
+load("/Users/benjamin.d.young/Documents/projects/bioinformatc_resources/pca_axes_saves/pca34.RData")
+load("/Users/benjamin.d.young/Documents/projects/bioinformatc_resources/pca_axes_saves/pca45.RData")
+load("/Users/benjamin.d.young/Documents/projects/bioinformatc_resources/pca_axes_saves/pca56.RData")
+```
+
+```{r New Variable Columns, include = F}
+## adding in grouping variable
+## NB the 17th_aug healthy has a whitespace at the end, need "healthy " to make work
+seq_tfall_final %>%
+  mutate(
+    Overall_treat = case_when(
+      Health == "pre_exposure" ~ "control",
+      Health == "visually_healthy" ~ "inoculated",
+      Health == "diseased" ~ "inoculated"
+    )
+  ) -> seq_tfall_final
+# View(seq_tfall_final)
+```
+
+```{r ordering tfall with count table, echo = F}
+matchup <- match(rownames(seq_tfall_final), colnames(DHE_counts))
+DHE_counts  <- DHE_counts[,matchup ]
+all(rownames(seq_tfall_final) == colnames(DHE_counts))
+```
+
+```{r data objects for preexposure, echo = F}
+seq_tfall_final %>% 
+  dplyr::filter(Health %in% "pre_exposure") -> tfall_preexposure
+
+DHE_counts %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "samps") %>% 
+  dplyr::filter(samps %in% rownames(tfall_preexposure)) %>% 
+  column_to_rownames(var = "samps") %>% 
+  t() -> DHE_counts_pe
+
+matchup <- match(rownames(tfall_preexposure), colnames(DHE_counts_pe))
+DHE_counts_pe  <- DHE_counts_pe[,matchup ]
+all(rownames(tfall_preexposure) == colnames(DHE_counts_pe))
+```
+
+```{r data objects for disease inoculated, echo = F}
+seq_tfall_final %>% 
+  dplyr::filter(!Health %in% "pre_exposure") -> tfall_diseaseinoc
+
+DHE_counts %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "samps") %>% 
+  dplyr::filter(samps %in% rownames(tfall_diseaseinoc)) %>% 
+  column_to_rownames(var = "samps") %>% 
+  t() -> DHE_counts_di
+
+matchup <- match(rownames(tfall_diseaseinoc), colnames(DHE_counts_di))
+DHE_counts_di  <- DHE_counts_di[,matchup ]
+all(rownames(tfall_diseaseinoc) == colnames(DHE_counts_di))
+```
+
+
+## Pre Exposure Analysis of Transcriptomic Samples. 
+
+```{r Making DeSeq object, include=FALSE}
+#making the dds model to use in deseq2
+ddsall = DESeqDataSetFromMatrix(countData =  round(DHE_counts_pe),
+                                tfall_preexposure,
+                                ~ Genotype + Tank_treatment)
+```
+
+```{r CPM filtering and DDS object creation}
+nrow(ddsall)
+ncol(ddsall)
+
+# cpm filtering step and seeing what original VS filtered gene number left is
+cccall <- counts(ddsall)
+keep <- rowSums(cpm(cccall)>=2) >= 15
+cccall <- cccall[keep, ]
+
+nrow(ddsall)
+ncol(ddsall)
+nrow(cccall)
+ncol(cccall)
+
+cccall %>%
+  as.data.frame()  -> cccall
+  
+ddsall <-
+  DESeqDataSetFromMatrix(
+    countData = cccall,
+    colData = tfall_preexposure,
+    design = ~ Genotype + Tank_treatment
+  )
+```
+
+Left with *15,594* genes for pre-exposure analysis. 
+
+```{r VST, include=FALSE}
+vsdall_pe <- vst(ddsall, blind=FALSE)
+```
+
+```{r CLR transformation for PCAtools, include = F}
+PCA_tools_all <- assay(vsdall_pe)
+
+rv <- rowVars(PCA_tools_all)
+select <- order(rv, 
+                decreasing = TRUE)[seq_len(min(500, length(rv)))]
+
+allsamps <-
+  pca(PCA_tools_all[select, ], 
+      metadata = tfall_preexposure, 
+      removeVar = 0.10)
+```
+
+```{r Plots from PCAtools, fig.width=15, fig.height=10}
+## Scree plot showing amount of variance explained by each PC (bars) and cumulative variance as you progress along bars (line)
+screeplot(allsamps, 
+          getComponents(allsamps, 1:15), 
+          axisLabSize = 10, 
+          titleLabSize = 10, 
+          returnPlot = T, 
+          ylim = c(0,90), 
+          vline = c(findElbowPoint(allsamps$variance))) +
+  geom_label(aes(x = findElbowPoint(allsamps$variance) + 1, y = 25,
+      label = 'Elbow method', vjust = -1, size = 4))
+
+## Plotting of a large number of PCs
+pairsplot(allsamps, 
+          colby = "Tank_treatment")
+
+## Plot showing the samples with the strongest loadings of ASVs for each axes identyfying ones which are driving the variance
+# plotloadings(allsamps, labSize = 3)
+```
+
+```{r EigenPlots for all metadata variables, echo = F}
+# eigencorplot(allsamps,
+#              components = getComponents(allsamps, 1:11),
+#     metavars = c("Genotype", "Tank_treatment", "Dtreatment", "Genotype", 
+#                  "Recovery_tank", "ERL_tank_number", "D_touch_tank"), 
+#     col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+#     cexCorval = 0.8,
+#     fontCorval = 1,
+#     posLab = 'all',
+#     rotLabX = 45,
+#     scale = TRUE,
+#     main = bquote(Principal~Component~Pearson~r^2~metadata~significant~correlation),
+#     plotRsquared = T,
+#     corFUN = 'pearson',
+#     corUSE = 'pairwise.complete.obs',
+#     corMultipleTestCorrection = 'BH',
+#     signifSymbols = c('****', '***', '**', '*', ''),
+#     signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+#     )
+```
+
+```{r Correlation p;lot genet dentity and tank temperature treatment, fig.width=12, fig.height = 4}
+eigencorplot(allsamps,
+             components = getComponents(allsamps, 1:11),
+    metavars = c("Genotype", "Tank_treatment"), 
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2,
+    fontCorval = 2,
+    posLab = 'all',
+    rotLabX = 45,
+    scale = TRUE,
+    main = bquote(Principal~Component~Pearson~r^2~metadata~significant~correlation),
+    plotRsquared = T,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+    )
+```
+
+```{r PC axis dataframes}
+pca12 <- plotPCA(vsdall_pe, intgroup=c("Dtreatment", "Tank_treatment", "Health", "Genotype", "Dif_dis_treat", "geno_tank"), returnData = TRUE)
+pca23 <- pcaaxes23(vsdall_pe, intgroup=c("Dtreatment", "Tank_treatment", "Health", "Genotype", "Dif_dis_treat", "geno_tank"), returnData = TRUE)
+pca34 <- pcaaxes34(vsdall_pe, intgroup=c("Dtreatment", "Tank_treatment", "Health", "Genotype", "Dif_dis_treat", "geno_tank"), returnData = TRUE)
+pca45 <- pcaaxes45(vsdall_pe, intgroup=c("Dtreatment", "Tank_treatment", "Health", "Genotype", "Dif_dis_treat", "geno_tank"), returnData = TRUE)
+pca56 <- pcaaxes56(vsdall_pe, intgroup=c("Dtreatment", "Tank_treatment", "Health", "Genotype", "Dif_dis_treat", "geno_tank"), returnData = TRUE)
+```
+
+```{r DeSeq2 PCAs for % loadings}
+plotPCA(vsdall_pe, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes23(vsdall_pe, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes34(vsdall_pe, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes45(vsdall_pe, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes56(vsdall_pe, intgroup=c("Tank_treatment"), returnData = F)
+```
+
+```{r PCA plots of tank treatment and genet identity, echo = F}
+ggplot(pca12, aes(PC1, PC2, color = Genotype, shape = Tank_treatment)) +
+  geom_point(size = 3) +  xlab(paste0("PC1 24% variance")) +
+  ylab(paste0("PC2 12% variance")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  )  +
+  theme(legend.key.size = unit(0.7, "cm")) +
+  stat_ellipse(inherit.aes = T)
+
+ggplot(pca23, aes(PC2, PC3, color = Tank_treatment, shape = Genotype)) +
+  geom_point(size = 3) +  xlab(paste0("PC2 13% variance")) +
+  ylab(paste0("PC3 13% variance")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  )  +
+  theme(legend.key.size = unit(0.7, "cm")) +
+  stat_ellipse()
+
+ggplot(pca34, aes(PC3, PC4, color = Tank_treatment, shape = Genotype)) +
+  geom_point(size = 3) +  xlab(paste0("PC3 13% variance")) +
+  ylab(paste0("PC4 7% variance")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  )  +
+  theme(legend.key.size = unit(0.7, "cm")) +
+  stat_ellipse()
+```
+
+
+### Removing Genotype 
+
+```{r VST with limma removing year}
+vsdgeno <- vst(ddsall)
+assay(vsdgeno) <- limma::removeBatchEffect(assay(vsdgeno), vsdgeno$Genotype)
+```
+
+```{r CLR transformation for PCAtools, include = F}
+PCA_tools_all <- assay(vsdgeno)
+
+rv <- rowVars(PCA_tools_all)
+select <- order(rv, decreasing = TRUE)[seq_len(min(500, length(rv)))]
+
+allsamps <-
+  pca(PCA_tools_all[select, ], 
+      metadata = tfall_preexposure, 
+      removeVar = 0.10)
+```
+
+```{r PC axes loadings and pairs plot, fig.width=15, fig.height=10, echo = F}
+## Scree plot showing amount of variance explained by each PC (bars) and cumulative variance as you progress along bars (line)
+screeplot(allsamps, 
+          getComponents(allsamps, 1:15), 
+          axisLabSize = 10, 
+          titleLabSize = 10, 
+          returnPlot = T, 
+          ylim = c(0,90), 
+          vline = c(findElbowPoint(allsamps$variance))) +
+  geom_label(aes(x = findElbowPoint(allsamps$variance) + 1, y = 25,
+      label = 'Elbow method', vjust = -1, size = 4))
+
+## Plotting of a large number of PCs
+pairsplot(allsamps, 
+          colby = "Tank_treatment")
+
+## Plot showing the samples with the strongest loadings of ASVs for each axes identyfying ones which are driving the variance
+#plotloadings(allsamps, labSize = 3)
+```
+
+```{r Correlation plot with all metadata variables, fig.width=12, fig.height = 6, echo = F}
+# eigencorplot(allsamps,
+#              components = getComponents(allsamps, 1:11),
+#     metavars = c("Genotype", "Tank_treatment", "Dtreatment", "Genotype", 
+#                  "Recovery_tank", "ERL_tank_number", "D_touch_tank"), 
+#     col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+#     cexCorval = 1.2,
+#     fontCorval = 2,
+#     posLab = 'all',
+#     rotLabX = 45,
+#     scale = TRUE,
+#     main = bquote(Principal~Component~Pearson~r^2~metadata~significant~correlation),
+#     plotRsquared = T,
+#     corFUN = 'pearson',
+#     corUSE = 'pairwise.complete.obs',
+#     corMultipleTestCorrection = 'BH',
+#     signifSymbols = c('****', '***', '**', '*', ''),
+#     signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+#     )
+```
+
+```{r correlation plot of tank treatment with genet removed, fig.width=12, fig.height = 4, echo = F}
+eigencorplot(allsamps,
+             components = getComponents(allsamps, 1:11),
+    metavars = c("Genotype", "Tank_treatment"), 
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2,
+    fontCorval = 2,
+    posLab = 'all',
+    rotLabX = 45,
+    scale = FALSE,
+    main = bquote(Principal~Component~Pearson~r^2~metadata~significant~correlation),
+    plotRsquared = T,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+    )
+```
+
+```{r PC axis dataframes, include = F}
+pca12_m3 <- plotPCA(vsdgeno, intgroup=c("Dtreatment", "Tank_treatment", "Health", 
+                                        "Genotype", "Disease_tank", "Dif_dis_treat", "timepoint"), returnData = TRUE)
+pca23_m3 <- pcaaxes23(vsdgeno, intgroup=c("Dtreatment", "Tank_treatment", "Health", 
+                                          "Genotype", "Disease_tank", "Dif_dis_treat", "timepoint"), returnData = TRUE)
+pca34_m3 <- pcaaxes34(vsdgeno, intgroup=c("Dtreatment", "Tank_treatment", "Health", 
+                                          "Genotype", "Disease_tank", "Dif_dis_treat", "timepoint"), returnData = TRUE)
+pca45_m3 <- pcaaxes45(vsdgeno, intgroup=c("Dtreatment", "Tank_treatment", "Health", 
+                                          "Genotype", "Disease_tank", "Dif_dis_treat", "timepoint"), returnData = TRUE)
+pca56_m3 <- pcaaxes56(vsdgeno, intgroup=c("Dtreatment", "Tank_treatment", "Health", 
+                                          "Genotype", "Disease_tank", "Dif_dis_treat", "timepoint"), returnData = TRUE)
+```
+
+```{r DeSeq2 PCA, echo = F}
+plotPCA(vsdgeno, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes23(vsdgeno, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes34(vsdgeno, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes45(vsdgeno, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes56(vsdgeno, intgroup=c("Tank_treatment"), returnData = F)
+```
+
+```{r Tank Treatment PCA, fig.width=7, fig.height=4, echo = F}
+ggplot(pca12_m3, aes(PC1, PC2, color = Tank_treatment)) +
+  geom_point(size = 3) +  
+  xlab(paste0("PC1 13% variance")) +
+  ylab(paste0("PC2 10% variance")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  )  +
+  theme(legend.key.size = unit(0.7, "cm")) +
+  stat_ellipse(aes(PC1, PC2, group = Tank_treatment), type = "norm") +
+  scale_color_manual(values = c("blue3", "orangered2"))
+
+ggplot(pca23_m3, aes(PC2, PC3, colour=Tank_treatment)) + 
+  geom_point(size=3) +  
+  xlab(paste0("PC2 9% variance")) + 
+  ylab(paste0("PC3 7% variance")) + 
+  theme(text = element_text(size=11, family = "Arial"), 
+        legend.position = "right", 
+        panel.background = element_rect(fill = "transparent"), 
+        axis.line = element_line(colour = "black"), 
+        legend.key = element_rect(fill = "transparent"), 
+        axis.text = element_text(size = 8)) + 
+  stat_ellipse() +
+  scale_color_manual(values = c("blue3", "orangered2"))
+
+ggplot(pca34_m3, aes(PC3, PC4, colour=Tank_treatment)) + 
+  geom_point(size=3) +  
+  xlab(paste0("PC3 7% variance")) + 
+  ylab(paste0("PC4 6% variance")) + 
+  theme(text = element_text(size=11, family = "Arial"), 
+        legend.position = "right", 
+        panel.background = element_rect(fill = "transparent"), 
+        axis.line = element_line(colour = "black"), 
+        legend.key = element_rect(fill = "transparent"), 
+        axis.text = element_text(size = 8)) + 
+  stat_ellipse() +
+  scale_color_manual(values = c("blue3", "orangered2"))
+
+ggplot(pca45_m3, aes(PC4, PC5, colour=Tank_treatment)) + 
+  geom_point(size=3) +  
+  xlab(paste0("PC4 6% variance")) + 
+  ylab(paste0("PC5 4% variance")) + 
+  theme(text = element_text(size=11, family = "Arial"), 
+        legend.position = "right", 
+        panel.background = element_rect(fill = "transparent"), 
+        axis.line = element_line(colour = "black"), 
+        legend.key = element_rect(fill = "transparent"), 
+        axis.text = element_text(size = 8)) + 
+  stat_ellipse() +
+  scale_color_manual(values = c("blue3", "orangered2"))
+
+ggplot(pca56_m3, aes(PC5, PC6, colour=Tank_treatment)) + 
+  geom_point(size=3) +  
+  xlab(paste0("PC5 4% variance")) + 
+  ylab(paste0("PC6 3% variance")) + 
+  theme(text = element_text(size=11, family = "Arial"), 
+        legend.position = "right", 
+        panel.background = element_rect(fill = "transparent"), 
+        axis.line = element_line(colour = "black"), 
+        legend.key = element_rect(fill = "transparent"), 
+        axis.text = element_text(size = 8)) + 
+  stat_ellipse() +
+  scale_color_manual(values = c("blue3", "orangered2"))
+```
+
+### DeSeq2 Analysis for Tank Treatment
+
+```{r Differential Exprssion analysis}
+ddsall <- DESeq(ddsall)
+
+resultsNames(ddsall)
+tank_res <- results(ddsall, 
+                    contrast = c("Tank_treatment", "heat", "ambient"), 
+                    alpha = 0.01, 
+                    test = "Wald")
+summary(tank_res)
+
+
+
+
+```
+
+```{r result dataframes for DEG and writing csvs, include = F}
+as.data.frame(tank_res) %>% 
+  dplyr::filter(padj < 0.01) %>% 
+  rownames_to_column(var = "Count_ID") %>%
+  inner_join(annot_4_analysis %>%
+               dplyr::select(Count_ID, Gene.Annotation)) %>% 
+  column_to_rownames(var = "Count_ID") -> heat_vs_ambient
+
+as.data.frame(tank_res) %>%
+  na.exclude() %>%
+  filter(padj < 0.01) %>% 
+  filter(log2FoldChange >=1 | log2FoldChange <= -1) %>% 
+  rownames_to_column(var = "Count_ID") %>%
+  inner_join(annot_4_analysis %>% 
+               dplyr::select(Count_ID, Gene.Annotation)) %>% 
+  column_to_rownames(var = "Count_ID") -> tankres_lfc1
+
+# View(heat_vs_ambient)
+# View(tankres_lfc1)
+
+# write.csv(heat_vs_ambient,
+#           file = "~/Documents/projects/DHE/manuscript/r_saved_files/preexposure_transcriptomic/bl_heat_vs_ambient_0.01.csv")
+# write.csv(tankres_lfc1,
+#           file = "~/Documents/projects/DHE/manuscript/r_saved_files/preexposure_transcriptomic/bl_heat_vs_ambient_LFC1_0.01.csv")
+```
+
+
+### Complex Heatmap of LFC1 and 0.01 Significant Genes preexposure Samples for Tank treatment
+
+```{r complex heatmap prep for LFC1 genes, include = F}
+matmatnorder <- assay(vsdgeno)[rownames(tankres_lfc1),]
+
+# Colours for the tank treatments
+ccann <- data.frame(tfall_preexposure$Tank_treatment)
+colnames(ccann) <- c("Tank_treatment")
+colcol <- list("Tank_treatment" = c("ambient" = "blue3", "heat" = "orangered2"))
+
+# Top annotation bar for the complex heatmap
+samname <- HeatmapAnnotation(df = ccann,
+                             which = "col",
+                             col = colcol,                        
+                             simple_anno_size = unit(0.5, "cm"),
+                             annotation_name_gp = gpar(fontsize = 5),
+                             annotation_name_side = "left")
+
+# Fill for the gene VST data
+col_fun = colorRamp2(c(-2, 0, 2), 
+                     c("dodgerblue4", "white", "red3"))
+col_fun(seq(-3, 3))
+
+# adding annotation into vsd count matrix
+annot_4_analysis %>% 
+  dplyr::select(Count_ID, Gene.Annotation) %>%
+  right_join(matmatnorder %>% 
+               as.data.frame() %>% 
+               rownames_to_column(var="Count_ID")) %>%
+  column_to_rownames(var="Count_ID") %>%
+  tidyr::drop_na() -> matmatnorder
+#View(matmatnorder)
+
+# Changing names to a character
+matmatnorder$Gene.Annotation <- as.character(matmatnorder$Gene.Annotation)
+
+#id_to_annot, need to have rownames when putting into complex heatmap
+hello <-
+  rowAnnotation(foo = anno_text(
+    matmatnorder %>% as.data.frame() %>% dplyr::select(Gene.Annotation)
+  ))
+```
+
+```{r PC1 Variance Heatmaps, fig.height=13, fig.width=8}
+# NB manual specify of the GO columns, here it is 86:93. First heatmap we remove, 2nd heatmap we select. 
+  Heatmap(
+    t(scale(
+      t(matmatnorder %>% as.data.frame() %>% dplyr::select(-c(
+        "Gene.Annotation"
+      )))
+    )),
+    cluster_columns = T,
+    show_row_dend = F,
+    show_column_dend = T,
+    column_km = 2,
+    column_gap = unit(0.5, "cm"),
+    row_km = 2,
+    row_gap = unit(0.5, "cm"),
+    col = col_fun,
+    row_title = NULL,
+    column_title = NULL,
+    top_annotation = samname,
+    right_annotation = rowAnnotation(foo = anno_text(
+      matmatnorder$Gene.Annotation,  gp = gpar(fontsize = 8, font = 10))), 
+    show_row_names = F, 
+    show_column_names = F,
+    column_dend_height = unit(3, "cm"))
+```
+
+
+## Disease Inoculated Analysis of Transcriptomic Samples. 
+
+```{r Making DeSeq object, include=FALSE}
+#making the dds model to use in deseq2
+ddsall = DESeqDataSetFromMatrix(countData =  round(DHE_counts_di),
+                                tfall_diseaseinoc,
+                                ~ Genotype + Health + Tank_treatment)
+```
+
+```{r CPM filtering and DDS object creation}
+nrow(ddsall)
+ncol(ddsall)
+
+# cpm filtering step and seeing what original VS filtered gene number left is
+cccall <- counts(ddsall)
+keep <- rowSums(cpm(cccall)>=2) >= 15
+cccall <- cccall[keep, ]
+
+nrow(ddsall)
+ncol(ddsall)
+nrow(cccall)
+ncol(cccall)
+
+cccall %>%
+  as.data.frame()  -> cccall
+  
+ddsall <-
+  DESeqDataSetFromMatrix(
+    countData = cccall,
+    colData = tfall_diseaseinoc,
+    design = ~ Genotype + Tank_treatment
+  )
+```
+
+Left with *15,253* genes for pre-exposure analysis. 
+
+```{r VST, include=FALSE}
+vsdall_di <- vst(ddsall, blind=FALSE)
+```
+
+```{r CLR transformation for PCAtools, include = F}
+PCA_tools_all <- assay(vsdall_di)
+
+rv <- rowVars(PCA_tools_all)
+select <- order(rv, 
+                decreasing = TRUE)[seq_len(min(500, length(rv)))]
+
+allsamps <-
+  pca(PCA_tools_all[select, ], 
+      metadata = tfall_diseaseinoc, 
+      removeVar = 0.10)
+```
+
+```{r Plots from PCAtools, fig.width=15, fig.height=10}
+## Scree plot showing amount of variance explained by each PC (bars) and cumulative variance as you progress along bars (line)
+screeplot(allsamps, 
+          getComponents(allsamps, 1:15), 
+          axisLabSize = 10, 
+          titleLabSize = 10, 
+          returnPlot = T, 
+          ylim = c(0,90), 
+          vline = c(findElbowPoint(allsamps$variance))) +
+  geom_label(aes(x = findElbowPoint(allsamps$variance) + 1, y = 25,
+      label = 'Elbow method', vjust = -1, size = 4))
+
+## Plotting of a large number of PCs
+pairsplot(allsamps, 
+          colby = "Tank_treatment")
+
+## Plot showing the samples with the strongest loadings of ASVs for each axes identyfying ones which are driving the variance
+# plotloadings(allsamps, labSize = 3)
+```
+
+```{r EigenPlots for all metadata variables, echo = F}
+# eigencorplot(allsamps,
+#              components = getComponents(allsamps, 1:11),
+#     metavars = c("Genotype", "Tank_treatment", "Dtreatment", "Genotype", 
+#                  "Recovery_tank", "ERL_tank_number", "D_touch_tank"), 
+#     col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+#     cexCorval = 0.8,
+#     fontCorval = 1,
+#     posLab = 'all',
+#     rotLabX = 45,
+#     scale = TRUE,
+#     main = bquote(Principal~Component~Pearson~r^2~metadata~significant~correlation),
+#     plotRsquared = T,
+#     corFUN = 'pearson',
+#     corUSE = 'pairwise.complete.obs',
+#     corMultipleTestCorrection = 'BH',
+#     signifSymbols = c('****', '***', '**', '*', ''),
+#     signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+#     )
+```
+
+```{r Correlation p;lot genet dentity and tank temperature treatment, fig.width=12, fig.height = 4}
+eigencorplot(allsamps,
+             components = getComponents(allsamps, 1:11),
+    metavars = c("Genotype", "Tank_treatment", "Health"), 
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2,
+    fontCorval = 2,
+    posLab = 'all',
+    rotLabX = 45,
+    scale = TRUE,
+    main = bquote(Principal~Component~Pearson~r^2~metadata~significant~correlation),
+    plotRsquared = T,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+    )
+```
+
+```{r PC axis dataframes}
+pca12 <- plotPCA(vsdall_di, intgroup=c("Dtreatment", "Tank_treatment", "Health", "Genotype", "Dif_dis_treat", "geno_tank"), returnData = TRUE)
+pca23 <- pcaaxes23(vsdall_di, intgroup=c("Dtreatment", "Tank_treatment", "Health", "Genotype", "Dif_dis_treat", "geno_tank"), returnData = TRUE)
+pca34 <- pcaaxes34(vsdall_di, intgroup=c("Dtreatment", "Tank_treatment", "Health", "Genotype", "Dif_dis_treat", "geno_tank"), returnData = TRUE)
+pca45 <- pcaaxes45(vsdall_di, intgroup=c("Dtreatment", "Tank_treatment", "Health", "Genotype", "Dif_dis_treat", "geno_tank"), returnData = TRUE)
+pca56 <- pcaaxes56(vsdall_di, intgroup=c("Dtreatment", "Tank_treatment", "Health", "Genotype", "Dif_dis_treat", "geno_tank"), returnData = TRUE)
+```
+
+```{r DeSeq2 PCAs for % loadings}
+plotPCA(vsdall_di, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes23(vsdall_di, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes34(vsdall_di, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes45(vsdall_di, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes56(vsdall_di, intgroup=c("Tank_treatment"), returnData = F)
+```
+```{r Genet and Health PCA plots, echo = F}
+ggplot(pca12, aes(PC1, PC2, color = Genotype, shape = Health)) +
+  geom_point(size = 3) +  xlab(paste0("PC1 24% variance")) +
+  ylab(paste0("PC2 12% variance")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  )  +
+  theme(legend.key.size = unit(0.7, "cm")) +
+  stat_ellipse(inherit.aes = T)
+
+ggplot(pca23, aes(PC2, PC3, color = Genotype, shape = Health)) +
+  geom_point(size = 3) +  xlab(paste0("PC2 13% variance")) +
+  ylab(paste0("PC3 13% variance")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  )  +
+  theme(legend.key.size = unit(0.7, "cm")) +
+  stat_ellipse()
+
+ggplot(pca34, aes(PC3, PC4, color = Genotype, shape = Health)) +
+  geom_point(size = 3) +  xlab(paste0("PC3 13% variance")) +
+  ylab(paste0("PC4 7% variance")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  )  +
+  theme(legend.key.size = unit(0.7, "cm")) +
+  stat_ellipse()
+```
+
+```{r PCA plots of tank treatment and genet identity, echo = F}
+ggplot(pca12, aes(PC1, PC2, color = Genotype, shape = Tank_treatment)) +
+  geom_point(size = 3) +  xlab(paste0("PC1 24% variance")) +
+  ylab(paste0("PC2 12% variance")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  )  +
+  theme(legend.key.size = unit(0.7, "cm")) +
+  stat_ellipse(inherit.aes = T)
+
+ggplot(pca23, aes(PC2, PC3, color = Tank_treatment, shape = Genotype)) +
+  geom_point(size = 3) +  xlab(paste0("PC2 13% variance")) +
+  ylab(paste0("PC3 13% variance")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  )  +
+  theme(legend.key.size = unit(0.7, "cm")) +
+  stat_ellipse()
+
+ggplot(pca34, aes(PC3, PC4, color = Tank_treatment, shape = Genotype)) +
+  geom_point(size = 3) +  xlab(paste0("PC3 13% variance")) +
+  ylab(paste0("PC4 7% variance")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  )  +
+  theme(legend.key.size = unit(0.7, "cm")) +
+  stat_ellipse()
+```
+
+
+### Removing Genotype 
+
+```{r VST with limma removing year}
+vsdgeno <- vst(ddsall)
+assay(vsdgeno) <- limma::removeBatchEffect(assay(vsdgeno), vsdgeno$Genotype)
+```
+
+```{r CLR transformation for PCAtools, include = F}
+PCA_tools_all <- assay(vsdgeno)
+
+rv <- rowVars(PCA_tools_all)
+select <- order(rv, decreasing = TRUE)[seq_len(min(500, length(rv)))]
+
+allsamps <-
+  pca(PCA_tools_all[select, ], 
+      metadata = tfall_diseaseinoc, 
+      removeVar = 0.10)
+```
+
+```{r PC axes loadings and pairs plot, fig.width=15, fig.height=10, echo = F}
+## Scree plot showing amount of variance explained by each PC (bars) and cumulative variance as you progress along bars (line)
+screeplot(allsamps, 
+          getComponents(allsamps, 1:15), 
+          axisLabSize = 10, 
+          titleLabSize = 10, 
+          returnPlot = T, 
+          ylim = c(0,90), 
+          vline = c(findElbowPoint(allsamps$variance))) +
+  geom_label(aes(x = findElbowPoint(allsamps$variance) + 1, y = 25,
+      label = 'Elbow method', vjust = -1, size = 4))
+
+## Plotting of a large number of PCs
+pairsplot(allsamps, 
+          colby = "Tank_treatment")
+
+## Plot showing the samples with the strongest loadings of ASVs for each axes identyfying ones which are driving the variance
+#plotloadings(allsamps, labSize = 3)
+```
+
+```{r Correlation plot with all metadata variables, fig.width=12, fig.height = 6, echo = F}
+# eigencorplot(allsamps,
+#              components = getComponents(allsamps, 1:11),
+#     metavars = c("Genotype", "Tank_treatment", "Dtreatment", "Genotype", 
+#                  "Recovery_tank", "ERL_tank_number", "D_touch_tank"), 
+#     col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+#     cexCorval = 1.2,
+#     fontCorval = 2,
+#     posLab = 'all',
+#     rotLabX = 45,
+#     scale = TRUE,
+#     main = bquote(Principal~Component~Pearson~r^2~metadata~significant~correlation),
+#     plotRsquared = T,
+#     corFUN = 'pearson',
+#     corUSE = 'pairwise.complete.obs',
+#     corMultipleTestCorrection = 'BH',
+#     signifSymbols = c('****', '***', '**', '*', ''),
+#     signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+#     )
+```
+
+```{r correlation plot of tank treatment with genet removed, fig.width=12, fig.height = 4, echo = F}
+eigencorplot(allsamps,
+             components = getComponents(allsamps, 1:11),
+    metavars = c("Health", "Tank_treatment"), 
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2,
+    fontCorval = 2,
+    posLab = 'all',
+    rotLabX = 45,
+    scale = FALSE,
+    main = bquote(Principal~Component~Pearson~r^2~metadata~significant~correlation),
+    plotRsquared = T,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+    )
+```
+
+```{r PC axis dataframes, include = F}
+pca12_m3 <- plotPCA(vsdgeno, intgroup=c("Dtreatment", "Tank_treatment", "Health", 
+                                        "Genotype", "Disease_tank", "Dif_dis_treat", "timepoint"), returnData = TRUE)
+pca23_m3 <- pcaaxes23(vsdgeno, intgroup=c("Dtreatment", "Tank_treatment", "Health", 
+                                          "Genotype", "Disease_tank", "Dif_dis_treat", "timepoint"), returnData = TRUE)
+pca34_m3 <- pcaaxes34(vsdgeno, intgroup=c("Dtreatment", "Tank_treatment", "Health", 
+                                          "Genotype", "Disease_tank", "Dif_dis_treat", "timepoint"), returnData = TRUE)
+pca45_m3 <- pcaaxes45(vsdgeno, intgroup=c("Dtreatment", "Tank_treatment", "Health", 
+                                          "Genotype", "Disease_tank", "Dif_dis_treat", "timepoint"), returnData = TRUE)
+pca56_m3 <- pcaaxes56(vsdgeno, intgroup=c("Dtreatment", "Tank_treatment", "Health", 
+                                          "Genotype", "Disease_tank", "Dif_dis_treat", "timepoint"), returnData = TRUE)
+```
+
+```{r DeSeq2 PCA, echo = F}
+plotPCA(vsdgeno, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes23(vsdgeno, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes34(vsdgeno, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes45(vsdgeno, intgroup=c("Tank_treatment"), returnData = F)
+pcaaxes56(vsdgeno, intgroup=c("Tank_treatment"), returnData = F)
+```
+
+```{r Tank Treatment PCA, fig.width=7, fig.height=4, echo = F}
+ggplot(pca12_m3, aes(PC1, PC2, color = Tank_treatment, shape = Health)) +
+  geom_point(size = 3) +  
+  xlab(paste0("PC1 59% variance")) +
+  ylab(paste0("PC2 5% variance")) +
+  theme(
+    text = element_text(size = 11, family = "Arial"),
+    legend.position = "right",
+    panel.background = element_rect(fill = "transparent"),
+    axis.line = element_line(colour = "black"),
+    legend.key = element_rect(fill = "transparent"),
+    axis.text = element_text(size = 8)
+  )  +
+  theme(legend.key.size = unit(0.7, "cm")) +
+  stat_ellipse(aes(PC1, PC2, group = Tank_treatment), type = "norm") +
+  scale_color_manual(values = c("blue3", "orangered2"))
+
+ggplot(pca23_m3, aes(PC2, PC3, colour=Tank_treatment)) + 
+  geom_point(size=3) +  
+  xlab(paste0("PC2 9% variance")) + 
+  ylab(paste0("PC3 7% variance")) + 
+  theme(text = element_text(size=11, family = "Arial"), 
+        legend.position = "right", 
+        panel.background = element_rect(fill = "transparent"), 
+        axis.line = element_line(colour = "black"), 
+        legend.key = element_rect(fill = "transparent"), 
+        axis.text = element_text(size = 8)) + 
+  stat_ellipse() +
+  scale_color_manual(values = c("blue3", "orangered2"))
+
+ggplot(pca34_m3, aes(PC3, PC4, colour=Tank_treatment)) + 
+  geom_point(size=3) +  
+  xlab(paste0("PC3 7% variance")) + 
+  ylab(paste0("PC4 6% variance")) + 
+  theme(text = element_text(size=11, family = "Arial"), 
+        legend.position = "right", 
+        panel.background = element_rect(fill = "transparent"), 
+        axis.line = element_line(colour = "black"), 
+        legend.key = element_rect(fill = "transparent"), 
+        axis.text = element_text(size = 8)) + 
+  stat_ellipse() +
+  scale_color_manual(values = c("blue3", "orangered2"))
+
+ggplot(pca45_m3, aes(PC4, PC5, colour=Tank_treatment)) + 
+  geom_point(size=3) +  
+  xlab(paste0("PC4 6% variance")) + 
+  ylab(paste0("PC5 4% variance")) + 
+  theme(text = element_text(size=11, family = "Arial"), 
+        legend.position = "right", 
+        panel.background = element_rect(fill = "transparent"), 
+        axis.line = element_line(colour = "black"), 
+        legend.key = element_rect(fill = "transparent"), 
+        axis.text = element_text(size = 8)) + 
+  stat_ellipse() +
+  scale_color_manual(values = c("blue3", "orangered2"))
+
+ggplot(pca56_m3, aes(PC5, PC6, colour=Tank_treatment)) + 
+  geom_point(size=3) +  
+  xlab(paste0("PC5 4% variance")) + 
+  ylab(paste0("PC6 3% variance")) + 
+  theme(text = element_text(size=11, family = "Arial"), 
+        legend.position = "right", 
+        panel.background = element_rect(fill = "transparent"), 
+        axis.line = element_line(colour = "black"), 
+        legend.key = element_rect(fill = "transparent"), 
+        axis.text = element_text(size = 8)) + 
+  stat_ellipse() +
+  scale_color_manual(values = c("blue3", "orangered2"))
+```
+
+### DeSeq2 Analysis for Tank Treatment for Disease Inoculated Samples
+
+```{r Differential Exprssion analysis}
+ddsall <- DESeq(ddsall)
+
+resultsNames(ddsall)
+tank_res <- results(ddsall, 
+                    contrast = c("Tank_treatment", "heat", "ambient"), 
+                    alpha = 0.01, 
+                    test = "Wald")
+summary(tank_res)
+```
+
+```{r result dataframes for DEG and writing csvs, include = F}
+as.data.frame(tank_res) %>% 
+  dplyr::filter(padj < 0.01) %>% 
+  rownames_to_column(var = "Count_ID") %>%
+  inner_join(annot_4_analysis %>%
+               dplyr::select(Count_ID, Gene.Annotation)) %>% 
+  column_to_rownames(var = "Count_ID") -> heat_vs_ambient
+
+as.data.frame(tank_res) %>%
+  na.exclude() %>%
+  filter(padj < 0.01) %>% 
+  filter(log2FoldChange >=1 | log2FoldChange <= -1) %>% 
+  rownames_to_column(var = "Count_ID") %>%
+  inner_join(annot_4_analysis %>% 
+               dplyr::select(Count_ID, Gene.Annotation)) %>% 
+  column_to_rownames(var = "Count_ID") -> tankres_lfc1
+
+# View(heat_vs_ambient)
+# View(tankres_lfc1)
+
+# write.csv(heat_vs_ambient,
+#           file = "~/Documents/projects/DHE/manuscript/r_saved_files/diseaseinoculated_transcriptomcis/di_heat_vs_ambient_0.01.csv")
+# write.csv(tankres_lfc1,
+#           file = "~/Documents/projects/DHE/manuscript/r_saved_files/diseaseinoculated_transcriptomcis/di_heat_vs_ambient_LFC1_0.01.csv")
+```
+
+```{r complex heatmap prep for LFC1 genes, include = F}
+matmatnorder <- assay(vsdgeno)[rownames(tankres_lfc1),]
+
+# Colours for the tank treatments
+ccann <- data.frame(tfall_diseaseinoc$Tank_treatment)
+colnames(ccann) <- c("Tank_treatment")
+colcol <- list("Tank_treatment" = c("ambient" = "blue3", "heat" = "orangered2"))
+
+# Top annotation bar for the complex heatmap
+samname <- HeatmapAnnotation(df = ccann,
+                             which = "col",
+                             col = colcol,                        
+                             simple_anno_size = unit(0.5, "cm"),
+                             annotation_name_gp = gpar(fontsize = 5),
+                             annotation_name_side = "left")
+
+# Fill for the gene VST data
+col_fun = colorRamp2(c(-2, 0, 2), 
+                     c("dodgerblue4", "white", "red3"))
+col_fun(seq(-3, 3))
+
+# adding annotation into vsd count matrix
+annot_4_analysis %>% 
+  dplyr::select(Count_ID, Gene.Annotation) %>%
+  right_join(matmatnorder %>% 
+               as.data.frame() %>% 
+               rownames_to_column(var="Count_ID")) %>%
+  column_to_rownames(var="Count_ID") %>%
+  tidyr::drop_na() -> matmatnorder
+#View(matmatnorder)
+
+# Changing names to a character
+matmatnorder$Gene.Annotation <- as.character(matmatnorder$Gene.Annotation)
+
+#id_to_annot, need to have rownames when putting into complex heatmap
+hello <-
+  rowAnnotation(foo = anno_text(
+    matmatnorder %>% as.data.frame() %>% dplyr::select(Gene.Annotation)
+  ))
+```
+
+```{r PC1 Variance Heatmaps, fig.height=13, fig.width=10}
+# NB manual specify of the GO columns, here it is 86:93. First heatmap we remove, 2nd heatmap we select. 
+  Heatmap(
+    t(scale(
+      t(matmatnorder %>% as.data.frame() %>% dplyr::select(-c(
+        "Gene.Annotation"
+      )))
+    )),
+    cluster_columns = T,
+    show_row_dend = F,
+    show_column_dend = T,
+    column_km = 2,
+    column_gap = unit(0.5, "cm"),
+    row_km = 2,
+    row_gap = unit(0.5, "cm"),
+    col = col_fun,
+    row_title = NULL,
+    column_title = NULL,
+    top_annotation = samname,
+    right_annotation = rowAnnotation(foo = anno_text(
+      matmatnorder$Gene.Annotation,  gp = gpar(fontsize = 9, font = 10))), 
+    show_row_names = F, 
+    show_column_names = F,
+    column_dend_height = unit(3, "cm"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
