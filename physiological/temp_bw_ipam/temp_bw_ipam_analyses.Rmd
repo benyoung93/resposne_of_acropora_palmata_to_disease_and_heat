@@ -1,0 +1,1348 @@
+---
+title: "Acropora Palmata Disease Physio Data"
+author: "ben_young"
+date: "27/04/2020"
+output:
+  rmarkdown::pdf_document:
+    fig_caption: yes        
+    includes:  
+      in_header: my_header.tex
+---
+
+# Introduction  
+This document is the summary of the physiological data taken during the disease experiment run from the 2nd July 2019 to 18th August 2019. Fragments where moved between tanks during this period, and the dates for this are provided below.  
+
+**1 July to 23 July** - touch tanks (healing from wounding)  
+  
+**23 July - 6th August** - experimental tanks  
+  
+**6 August - 18 august** - touch tanks (disease exposure)  
+  
+This document will look at the following areas now.  
+
+1. Tank temperature data for the experiment  
+2. IPAM data  
+3. Buoyant weight data  
+4. Respiration data  
+5. Disease progression data  
+  
+  
+```{r package loading, include = F}
+library(tidyverse)
+library(lubridate)
+library(naniar) 
+library(grid)
+library(sciplot)
+library(plotrix)
+library(ggsignif)
+library(ggpubr)
+library(RNOmni)
+```
+
+# 1. Tank Temperature data  
+  
+```{r Read in collated temp data, include = F}
+setwd("/Users/benjamin.d.young/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/physiological_data/tank_temperature/")
+tt_temp <-
+  read.csv(
+    "/Users/benjamin.d.young/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/physiological_data/tank_temperature/tt_combined_temp.csv",
+    stringsAsFactors = F
+  )
+et_temp <-
+  read.csv(
+    "/Users/benjamin.d.young/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/physiological_data/tank_temperature/et_combined_temp.csv",
+    stringsAsFactors = F
+  )
+```
+
+```{r Temp data structure, include = F}
+str(tt_temp)
+str(et_temp)
+```
+
+```{r touch tank heat data, include = F}
+tt_temp %>%
+  dplyr::rename(
+    TT1 = Untitled,
+    TT2 = Untitled.1,
+    TT3 = Untitled.2,
+    TT4 = Untitled.3
+  ) %>%
+  mutate(date_time_posixct = parse_date_time(Time, c("mdy HMS"))) %>%
+  tidyr::separate(Time, c("Date", "Time"), sep = "\\ ") %>%
+  tidyr::separate(Time, c("Time", "remove"), sep = "\\.") %>%
+  dplyr::select(-c(remove)) %>%
+  gather("TT1", "TT2", "TT3", "TT4", key = tank_designation, value = temperture_celcius) %>%
+  filter(date_time_posixct <= as.Date("2019-08-18")) -> tt_temp_tidy
+```
+
+```{r Experimental tank heat data, include = F}
+et_temp %>%
+  dplyr::rename(
+    ET01 = Untitled,
+    ET02 = Untitled.1,
+    ET03 = Untitled.2,
+    ET04 = Untitled.3,
+    ET05 = Untitled.4,
+    ET06 = Untitled.5,
+    ET07 = Untitled.6,
+    ET08 = Untitled.7,
+    ET09 = Untitled.8,
+    ET10 = Untitled.9,
+    ET11 = Untitled.10,
+    ET12 = Untitled.11,
+    ET13 = Untitled.12,
+    ET14 = Untitled.13,
+    ET15 = Untitled.14,
+    ET16 = Untitled.15
+  ) %>%
+  gather(
+    "ET01",
+    "ET02",
+    "ET03",
+    "ET04",
+    "ET05",
+    "ET06",
+    "ET07",
+    "ET08",
+    "ET09",
+    "ET10",
+    "ET11",
+    "ET12",
+    "ET13",
+    "ET14",
+    "ET15",
+    "ET16",
+    key = tank_designation,
+    value = temperture_celcius
+  ) %>%
+  mutate(date_time_posixct = parse_date_time(Time, c("mdy HMS"))) %>%
+  filter(date_time_posixct <= as.Date("2019-08-07")) %>%
+  filter(date_time_posixct >= as.Date("2019-07-23")) %>%
+  filter(temperture_celcius > 27.3) %>%
+  dplyr::filter(
+    tank_designation == c(
+      "ET03",
+      "ET04",
+      "ET08",
+      "ET11",
+      "ET13",
+      "ET01",
+      "ET09",
+      "ET10",
+      "ET12",
+      "ET15"
+    )
+  ) %>%
+  mutate(tank_designation = fct_relevel(
+    tank_designation,
+    c(
+      "ET01",
+      "ET03",
+      "ET04",
+      "ET08",
+      "ET09",
+      "ET10",
+      "ET11",
+      "ET12",
+      "ET13",
+      "ET15"
+    )
+  )) -> et_temp_tidy
+```
+
+```{r checking temp dateframes, include = F}
+str(et_temp_tidy)
+str(tt_temp_tidy)
+```
+
+```{r Data set with tankr anges we want, include = F}
+tt_temp_tidy %>%
+  dplyr::select(-Date,-Time) %>% 
+  filter(date_time_posixct <= as.Date("2019-07-24")) %>% 
+  filter(date_time_posixct >= as.Date("2019-07-03")) %>%
+  mutate(Tank_type = factor(c("touchtank"))) %>%
+  rbind(
+    tt_temp_tidy %>%
+      dplyr::select(-Date,-Time) %>%
+      filter(date_time_posixct <= as.Date("2019-08-18")) %>%
+      filter(date_time_posixct >= as.Date("2019-08-07")) %>%
+      mutate(Tank_type = c("touchtank"))
+  ) %>%
+  rbind(
+    tt_temp_tidy %>%
+      dplyr::select(-Date,-Time) %>%
+      filter(date_time_posixct >= as.Date("2019-07-24")) %>%
+      filter(date_time_posixct <= as.Date("2019-07-26")) %>%
+      mutate(temperture_celcius = if_else(temperture_celcius > 1, "na", "na")) %>%
+      mutate(temperture_celcius = na_if(temperture_celcius, "na")) %>%
+      mutate(temperture_celcius = as.numeric(temperture_celcius)) %>%
+      mutate(Tank_type = c("touchtank")) %>%
+      top_n(1)
+  ) %>%
+  rbind(et_temp_tidy %>%
+          dplyr::select(-Time) %>%
+          mutate(Tank_type = c("experimentaltank"))) %>%
+  mutate(
+    heat_treatment = case_when(
+      tank_designation %in% c("ET1", "ET9", "ET10", "ET12", "ET15") ~ "Heat",
+      tank_designation %in% c("ET3", "ET4", "ET8", "ET11", "ET13",
+                              "TT1", "TT2", "TT3", "TT4") ~ "Ambient"
+    )
+  ) %>%
+  mutate(heat_treatment = factor(heat_treatment)) %>%
+  mutate(tank_designation = factor(
+    tank_designation,
+    levels =
+      c(
+        "TT1",
+        "TT2",
+        "TT3",
+        "TT4",
+        "ET01",
+        "ET09",
+        "ET10",
+        "ET12",
+        "ET15",
+        "ET03",
+        "ET04",
+        "ET08",
+        "ET11",
+        "ET13"
+      )
+  )) -> temp_4_plot
+
+str(temp_4_plot)
+```
+  
+```{r temperature plotting, fig.width=25, fig.height=8, echo=F, fig.cap="Tank temperature plotted for the entirity of the experiment. TT = touch tank. ET = Experimental tank."}
+ggplot(data = temp_4_plot,
+       aes(x = date_time_posixct, y = temperture_celcius, color = tank_designation)) +
+  geom_line(size = 2) +
+  scale_color_manual(
+    values = c(
+      "grey20",
+      "grey40",
+      "grey50",
+      "grey60",
+      "sienna1",
+      "tomato",
+      "tomato3",
+      "orangered2",
+      "red3",
+      "deepskyblue",
+      "deepskyblue4",
+      "blue3",
+      "black",
+      "darkslateblue",
+      "navy"
+    ),
+    name = "Tank Numbers",
+  ) +
+  theme_classic(base_size = 20) +
+  labs(y = "Temperature (°C)",
+       x = "Date") +
+  scale_x_datetime(
+    limit = c(as.POSIXct(as.Date("2019-07-10")), as.POSIXct(as.Date("2019-08-20"))),
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    guide = guide_axis(n.dodge = 2)
+  ) +
+  scale_y_continuous(limits = c(27, 30.5),
+                     breaks = seq(27, 30.5, by = 0.5)) +
+  geom_vline(xintercept = as.POSIXct(as.Date("2019-07-23")), linetype =
+               3) +
+  geom_vline(xintercept = as.POSIXct(as.Date("2019-08-07")), linetype =
+               3) +
+  annotation_custom(grobTree(
+    textGrob(
+      "Fragmentation and recovery",
+      x = 0.05,
+      y = 0.95,
+      hjust = 0,
+      gp = gpar(col = "black", fontsize = 20)
+    )
+  )) +
+  annotation_custom(grobTree(textGrob(
+    "Mild heat Stress",
+    x = 0.50,
+    y = 0.95,
+    hjust = 0,
+    gp = gpar(col = "black", fontsize = 20)
+  ))) +
+  annotation_custom(grobTree(textGrob(
+    "Disease Assay",
+    x = 0.78,
+    y = 0.95,
+    hjust = 0,
+    gp = gpar(col = "black", fontsize = 20)
+  )))  
+```  
+  
+**Notable Points**  
+  
+- From beginning July to July 9th in **Fragmentation and Recovery** there is inital high and then quick ramp down in regards to temperature. This occured due to fragments experiencing death at this temperature. Thus reduction from 28.5 to 27.5 caused no more fragments to die during recovery therfore fragments were maintained at this temperature  
+  
+- In **Mild Heat Stress** we see the daily .5 celcius increase before being maintained for 5 days at 30 celcius, and then returned to 27.5 celcius (red lines). The ambient frags stayed at 27.5 celcius (blue lines)  
+  
+- While the temperature in **Disease Assay** looks crazy, this is due to the temeprature probe being in the main body of the tank and not in each cup. Temperature tests over a day period showed that the cups ranged between 27.3 to 27.8 celcius despite fluctuating range of the tank.  
+  
+\newpage
+# 2. Buoyant Weight  
+  
+```{r BW data read in, include=F}
+setwd("/Users/benjamin.d.young/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/physiological_data/buoyant_weight/")
+
+read.csv(
+  "/Users/benjamin.d.young/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/physiological_data/metadata/de_meta.csv",
+  stringsAsFactors = F,
+  colClasses = c("Frag_number" = "character")
+) %>%
+  filter(Disease_treatment. == "disease") %>% #just fragments used in disease assays
+  dplyr::select(
+    Frag_number,
+    Genotype,
+    Recovery_tank,
+    ERL_tank_number,
+    Tank_treatment,
+    D_touch_tank,
+    D_treatment,
+    Jar_allocation
+  ) -> de_metadata
+
+read.csv(
+  "/Users/benjamin.d.young/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/physiological_data/buoyant_weight/bw_long_4_analysis.csv",
+  stringsAsFactors = FALSE
+) %>%
+  filter(Frag_number %in% de_metadata$Frag_number) %>%
+  filter(!Frag_number %in% c("103", "108", "14", "168", "17", "37", "75", "90", "116")) %>%
+  mutate_all(type.convert) %>%
+  mutate_if(is.factor, as.character) %>%
+  mutate(Frag_number = as.character(Frag_number)) %>%
+  dplyr::mutate(dt_posixct = parse_date_time(Date, c("dmy"))) %>%
+  unite(geno_tank, Genotype, Tank_treatment, remove = F) -> mstand
+
+str(mstand)
+# NB removing CN2 frags 90 and 116 as they fell of and got reglued during experiment (thus funky mass changes)
+```
+
+```{r BW summary stats, include = F}
+# for genotype and treatment split tanks
+mstand %>%
+  group_by(Genotype, Tank_treatment, dt_posixct, Round) %>%
+  dplyr::summarise(
+    bw_mean_mass_sa = mean(mass_standardised_sa_grams.cm.2),
+    bw_se_mass_sa = se(mass_standardised_sa_grams.cm.2),
+    bw_mean_delta_sa = mean(deltamass_standardsa_grams.cm.2.week),
+    bw_se_delta_sa = se(deltamass_standardsa_grams.cm.2.week),
+    bw_mean_percent = mean(percentchange),
+    bw_se_percent = se(percentchange)
+  ) %>%
+  ungroup() %>%
+  unite(geno_tank, Genotype, Tank_treatment, remove = F) -> bw_summ
+
+# for just treatment splits
+mstand %>%
+  group_by(Tank_treatment, dt_posixct, Round) %>%
+  dplyr::summarise(
+    bw_mean_mass_sa = mean(mass_standardised_sa_grams.cm.2),
+    bw_se_mass_sa = se(mass_standardised_sa_grams.cm.2),
+    bw_mean_delta_sa = mean(deltamass_standardsa_grams.cm.2.week),
+    bw_se_delta_sa = se(deltamass_standardsa_grams.cm.2.week),
+    bw_mean_percent = mean(percentchange),
+    bw_se_percent = se(percentchange)
+  ) %>%
+  ungroup() %>%
+  unite(geno_tank, Tank_treatment, remove = F) -> bw_summ_tt
+
+#View(bw_summ_tt)
+
+#mstand %>% 
+#  dplyr::filter(Genotype %in% c("CN2")) %>% 
+#  View()
+```  
+  
+## 2a) Buoyant weight split by genotype 
+
+```{r BW Plots, echo=F, fig.show = "hold", out.width = "50%", fig.cap= "Buoyant weight data visualised splitting by genotype. Top left = average mass of each genotypes fragments in each heat treatment standardised to surface area. Top right = Average change in mass for each genotypes fragments in heat treatment standardised to surface area. Bottom Left = Percentage change of standardised change in mass for each genotypes fragments in heat treatment. Black solid vertical lines in all plots denotes entire heat ramping period (23rd July 2019 to 8th Aug 2019). Dashed vertical black lines show 5 day period when frags are at 30 degrees celcius (30th July 2019 to 5th August 2019)"}
+
+ggplot(data = bw_summ,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_delta_sa,
+         color = Tank_treatment
+       )) +
+  geom_point() +
+  geom_line(aes(linetype = Tank_treatment)) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_delta_sa - bw_se_delta_sa,
+      ymax = bw_mean_delta_sa + bw_se_delta_sa
+    ),
+    width = .1
+  ) +
+  theme_bw() +
+  labs(title = "Buoyant Weight Change in Mass Standardised to SA",
+       x = "Date",
+       y = "Change in Mass per week") +
+  scale_color_manual(values = c("steelblue2",
+                                "orange1",
+                                "limegreen",
+                                "darkorchid")) +
+  facet_wrap( ~ Genotype) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  )
+
+ggplot(data = bw_summ,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_percent,
+         colour = Tank_treatment
+       )) +
+  geom_point() +
+  geom_line(aes(linetype = Tank_treatment)) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_percent - bw_se_percent,
+      ymax = bw_mean_percent + bw_se_percent
+    ),
+    width = .1
+  ) +
+  theme_bw() +
+  labs(title = "Buoyant Weight Percentage Change",
+       x = "Date",
+       y = "Percentage") +
+  scale_color_manual(values = c("steelblue2",
+                                "orange1",
+                                "limegreen",
+                                "darkorchid")) +
+  facet_wrap( ~ Genotype) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  )
+```
+
+```{r BW percentage change, fig.width=10, fig.height=4}
+bw_summ_tt
+
+ggplot(data = bw_summ_tt,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_percent,
+         colour = Tank_treatment
+       )) +
+  geom_point(size = 2) +
+  geom_line(aes(linetype = Tank_treatment), size = 1) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_percent - bw_se_percent,
+      ymax = bw_mean_percent + bw_se_percent
+    ),
+    width = .5
+  ) +
+  ylim(c(0, 10)) +
+  theme_bw(base_size = 15) +
+  labs(x = "Date",
+       y = "Percentage Change in Mass") +
+  scale_color_manual(values = c("blue3",
+                                "orangered2")) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "2 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-24"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-07"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-29"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-03"),
+    linetype = 2,
+    size = 0.3
+  ) 
+
+ggplot(data = bw_summ_tt,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_percent,
+         colour = Tank_treatment
+       )) +
+  geom_point(size = 3) +
+  geom_line(aes(linetype = Tank_treatment), size = 1) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_percent - bw_se_percent,
+      ymax = bw_mean_percent + bw_se_percent
+    ),
+    width = .1
+  ) + 
+  ylim(c(0,10)) +
+  theme_bw(base_size = 16) +
+  labs(x = "Date",
+       y = "Percentage Change In Standardises Mass") +
+  scale_color_manual(values = c("blue3",
+                                "orangered2")) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  ) 
+```
+
+
+```{r Stats on BW, include = T}
+bw_summ_tt
+mstand
+
+mstand %>% 
+  mutate(prop_change = percentchange/100, # need proportion for arcsine to work
+         p_arcsine = asin(sqrt(prop_change)), #arcsine square root 
+         ROUND = as.factor(Round)) -> mstand
+
+boxplot(percentchange ~ Tank_treatment, data = mstand)
+fit <- lm(percentchange ~ Tank_treatment, data = mstand)
+plot(fit)
+bartlett.test(percentchange ~ Tank_treatment, data = mstand)
+hist(resid(fit))
+
+boxplot(p_arcsine ~ Tank_treatment, data = mstand)
+fit <- lm(p_arcsine ~ Tank_treatment, data = mstand)
+plot(fit)
+bartlett.test(p_arcsine ~ Tank_treatment, data = mstand)
+hist(resid(fit))
+
+bw_anova <- (aov(mass_standardised_sa_grams.cm.2 ~ Tank_treatment*ROUND, data = mstand))
+plot(bw_anova)
+summary(bw_anova)
+bw_tukey <- TukeyHSD(bw_anova)
+bw_tukey$`Tank_treatment:ROUND`
+
+bw_anova <- (aov(percentchange ~ Tank_treatment*ROUND, data = mstand))
+plot(bw_anova)
+summary(bw_anova)
+bw_tukey <- TukeyHSD(bw_anova)
+bw_tukey$`Tank_treatment:ROUND`
+
+bw_anova <- (aov(p_arcsine ~ Tank_treatment*ROUND, data = mstand))
+View(bw_anova$model)
+plot(bw_anova)
+summary(bw_anova)
+bw_tukey <- TukeyHSD(bw_anova)
+bw_tukey$`Tank_treatment:ROUND`
+```
+
+```{r Treatment BW plot Mass SA, fig.width =10, fig.height=4}
+bw_summ_tt
+
+ggplot(data = bw_summ_tt,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_mass_sa,
+         colour = Tank_treatment
+       )) +
+  geom_point(size = 4) +
+  geom_line(aes(linetype = Tank_treatment), size = 2) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_mass_sa - bw_se_mass_sa,
+      ymax = bw_mean_mass_sa + bw_se_mass_sa
+    ),
+    width = .5
+  ) + 
+  ylim(c(25,35)) +
+  theme_bw(base_size = 19) +
+  labs(x = "Date",
+       y = "Mass Standardised to Surface Area") +
+  scale_color_manual(values = c("blue3",
+                                "orangered2")) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "2 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-24"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-07"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-29"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-03"),
+    linetype = 2,
+    size = 0.3
+  ) 
+
+ggplot(data = bw_summ_tt,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_percent,
+         colour = Tank_treatment
+       )) +
+  geom_point(size = 3) +
+  geom_line(aes(linetype = Tank_treatment), size = 1) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_percent - bw_se_percent,
+      ymax = bw_mean_percent + bw_se_percent
+    ),
+    width = .1
+  ) + 
+  ylim(c(0,10)) +
+  theme_bw(base_size = 16) +
+  labs(x = "Date",
+       y = "Percentage Change In Standardises Mass") +
+  scale_color_manual(values = c("blue3",
+                                "orangered2")) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  ) 
+```
+
+```{r BW Plots, echo=F, fig.show = "hold", out.width = "50%", fig.height=6, fig.width=10, fig.cap= "Buoyant weight data visualised splitting by genotype. Top left = average mass of each genotypes fragments in each heat treatment standardised to surface area. Top right = Average change in mass for each genotypes fragments in heat treatment standardised to surface area. Bottom Left = Percentage change of standardised change in mass for each genotypes fragments in heat treatment. Black solid vertical lines in all plots denotes entire heat ramping period (23rd July 2019 to 8th Aug 2019). Dashed vertical black lines show 5 day period when frags are at 30 degrees celcius (30th July 2019 to 5th August 2019)"}
+
+ggplot(data = bw_summ,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_delta_sa,
+         color = Genotype,
+         group = geno_tank
+       )) +
+  geom_point() +
+  geom_line(aes(linetype = Tank_treatment)) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_delta_sa - bw_se_delta_sa,
+      ymax = bw_mean_delta_sa + bw_se_delta_sa
+    ),
+    width = .1
+  ) +
+  theme_bw(base_size = 15) +
+  labs(title = "Buoyant Weight Change in Mass Standardised to SA",
+       x = "Date",
+       y = "Change in Mass per week") +
+  scale_color_manual(values = c("steelblue2",
+                                "orange1",
+                                "limegreen",
+                                "darkorchid")) +
+  facet_wrap( ~ Genotype) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  )
+
+ggplot(data = bw_summ,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_percent,
+         color = Genotype,
+         group = geno_tank
+       )) +
+  geom_point() +
+  geom_line(aes(linetype = Tank_treatment)) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_percent - bw_se_percent,
+      ymax = bw_mean_percent + bw_se_percent
+    ),
+    width = .1
+  ) +
+  theme_bw(base_size = 15) +
+  labs(title = "Buoyant Weight Percentage Change",
+       x = "Date",
+       y = "Percentage") +
+  scale_color_manual(values = c("steelblue2",
+                                "orange1",
+                                "limegreen",
+                                "darkorchid")) +
+  facet_wrap( ~ Genotype) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  )
+```
+   
+There does not seem to be any effect of the heat treatment on the fragment growth for the time we measured for this experiment. This is expected due to the short period we measured buoyant weight, and how it was not possible to continue this due to sampling affecting the weights of the fragments.  
+  
+**Notable points**  
+- CN2 is doing something funky, I need to go back to my notes and check if any of these frags were knocked off and reglued or if this was actually what we saw happen.  
+  
+- The growth does show us that the fragments were happy, and actively healing their wounds and also growing. I think this is super interesting for the disease assays as we can say that despite the mild heat shock, the fragments physiologically seemed to be doing well.  
+  
+\newpage
+## 2b) Buoyant weight split by tank treatment  
+  
+```{r Genotypes Compared together BW, echo=F, fig.show = "hold", out.width = "50%", fig.cap="Buoyant weight data split by tank treatments. Left = Delta change of fragment mass by week and standardised to SA. Right = percentage change of the delta mass per week standardised to SA. Black solid vertical lines in all plots denotes entire heat ramping period (23rd July 2019 to 8th Aug 2019). Dashed vertical black lines show 5 day period when frags are at 30 degrees celcius (30th July 2019 to 5th August 2019)"}
+ggplot(data = bw_summ,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_delta_sa,
+         color = Genotype,
+         group = geno_tank
+       )) +
+  geom_point() +
+  geom_line(aes(linetype = Tank_treatment)) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_delta_sa - bw_se_delta_sa,
+      ymax = bw_mean_delta_sa + bw_se_delta_sa
+    ),
+    width = .1
+  ) +
+  theme_bw() +
+  labs(title = "Buoyant Weight Change in Mass Standardised to SA",
+       x = "Date",
+       y = "Change in Mass per week") +
+  scale_color_manual(values = c("steelblue2",
+                                "orange1",
+                                "limegreen",
+                                "darkorchid")) +
+  facet_wrap(~ Tank_treatment) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  )
+
+ggplot(data = bw_summ,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_percent,
+         color = Genotype,
+         group = geno_tank
+       )) +
+  geom_point() +
+  geom_line(aes(linetype = Tank_treatment)) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_percent - bw_se_percent,
+      ymax = bw_mean_percent + bw_se_percent
+    ),
+    width = .1
+  ) +
+  theme_bw() +
+  labs(title = "Buoyant Weight Percentage Change",
+       x = "Date",
+       y = "Percentage") +
+  scale_color_manual(values = c("steelblue2",
+                                "orange1",
+                                "limegreen",
+                                "darkorchid")) +
+  facet_wrap(~ Tank_treatment) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  )
+```  
+   
+Splitting by the tank treatment does not show any super clear differences. Key points  
+  
+- It does show that HS1 potentially has the highest growth rate of the 4 genotypes.  
+  
+- Again, I am not sure what is happening with CN2, I am looking into this  
+  
+\newpage
+## 2c) Buoyant weight all together  
+  
+```{r Buoyant weight all together, echo =F, fig.show = "hold", out.width = "50%", fig.cap="Buoyant weight data all together. Left = Delta change of fragment mass by week and standardised to SA. Right = percentage change of the delta mass per week standardised to SA. Black solid vertical lines in all plots denotes entire heat ramping period (23rd July 2019 to 8th Aug 2019). Dashed vertical black lines show 5 day period when frags are at 30 degrees celcius (30th July 2019 to 5th August 2019)"}
+ggplot(data = bw_summ,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_delta_sa,
+         color = Genotype,
+         group = geno_tank
+       )) +
+  geom_point() +
+  geom_line(aes(linetype = Tank_treatment)) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_delta_sa - bw_se_delta_sa,
+      ymax = bw_mean_delta_sa + bw_se_delta_sa
+    ),
+    width = .1
+  ) +
+  theme_bw() +
+  labs(title = "Buoyant Weight Change in Mass Standardised to SA",
+       x = "Date",
+       y = "Change in Mass per week") +
+  scale_color_manual(values = c("steelblue2",
+                                "orange1",
+                                "limegreen",
+                                "darkorchid")) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  )
+
+ggplot(data = bw_summ,
+       aes(
+         x = as.Date(dt_posixct),
+         y = bw_mean_percent,
+         color = Genotype,
+         group = geno_tank
+       )) +
+  geom_point() +
+  geom_line(aes(linetype = Tank_treatment)) +
+  geom_errorbar(
+    aes(
+      ymin = bw_mean_percent - bw_se_percent,
+      ymax = bw_mean_percent + bw_se_percent
+    ),
+    width = .1
+  ) +
+  theme_bw() +
+  labs(title = "Buoyant Weight Percentage Change",
+       x = "Date",
+       y = "Percentage") +
+  scale_color_manual(values = c("steelblue2",
+                                "orange1",
+                                "limegreen",
+                                "darkorchid")) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  )
+```  
+   
+When all together, it seems  
+  
+- CN4 is healing and growing the slowest  
+  
+- HS1 is growing the fastest.  
+  
+- In the left plot, it seems ambient is higher in the final timepoint than the heat (I doubt this will be statistically significant)  
+  
+\newpage
+# 3. IPAM  
+```{r IPAM data import and merging and cleaning, include =F}
+read.csv(
+  "/Users/benjamin.d.young/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/physiological_data/metadata/de_meta.csv",
+  stringsAsFactors = F,
+  colClasses = c("Frag_number" = "character")
+) %>%
+  filter(Disease_treatment. == "disease") %>% #just fragments used in disease assays
+  dplyr::select(
+    Frag_number,
+    Genotype,
+    Recovery_tank,
+    ERL_tank_number,
+    Tank_treatment,
+    D_touch_tank,
+    D_treatment,
+    Jar_allocation
+  ) -> de_metadata
+
+read.csv(
+  "/Users/benjamin.d.young/Dropbox/NOAA_postdoc/projects/phd_chapters/DHE/physiological_data/ipam/data_4_analysis/IPAM_LONG_RAW_done.csv",
+  stringsAsFactors = FALSE,
+  colClasses = c("IPAM_round" = "factor")
+) %>%
+  filter(Frag_number %in% de_metadata$Frag_number) %>%
+  dplyr::mutate(dt_posixct = parse_date_time(date, c("dmy"))) %>%
+  dplyr::mutate(F_VALUE = as.numeric(F_value)) %>%
+  mutate(Fm_VALUE = as.numeric(Fm_value)) %>%
+  mutate(YII_VALUE = as.numeric(YII_value)) %>%
+  na.omit() %>%
+  mutate (FvFm = (Fm_VALUE-F_VALUE)/Fm_VALUE) %>%
+  group_by(IPAM_round, Frag_number) %>%
+  dplyr::mutate(
+    F_mean = mean(F_VALUE),
+    Fm_mean = mean(Fm_VALUE),
+    YII_mean = mean(YII_VALUE),
+    FvFm_mean = mean(FvFm)
+  ) %>%
+  ungroup() %>%
+  right_join(de_metadata, by = c("Frag_number" = "Frag_number")) -> IPAM_4_plotting
+
+#View(IPAM_4_plotting)
+str(IPAM_4_plotting)
+```
+
+```{r IPAM summary data, include = F}
+IPAM_4_plotting %>%
+  group_by(Genotype, Tank_treatment, dt_posixct) %>%
+  dplyr::summarise(
+    F_MEAN = mean(F_mean),
+    Fm_MEAN = mean(Fm_mean),
+    YII_MEAN = mean(YII_mean),
+    F_se = se(F_mean),
+    Fm_se = se(Fm_mean),
+    YII_se = se(YII_mean)
+  ) %>%
+  ungroup() %>%
+  unite(geno_tank, Genotype, Tank_treatment, remove = F) -> ipam_sum
+ipam_sum
+
+IPAM_4_plotting %>%
+  group_by(Tank_treatment, dt_posixct) %>%
+  dplyr::summarise(
+    F_MEAN = mean(F_mean),
+    Fm_MEAN = mean(Fm_mean),
+    YII_MEAN = mean(YII_mean),
+    F_se = se(F_mean),
+    Fm_se = se(Fm_mean),
+    YII_se = se(YII_mean),
+    FvFm_MEAN = mean(FvFm_mean),
+    FvFm_se = se(FvFm_mean)
+  ) %>%
+  ungroup() %>%
+  unite(geno_tank, Tank_treatment, remove = F) -> ipam_sum_tt
+ipam_sum_tt
+
+```
+  
+```{r, fig.height=4, fig.width=10}
+ggplot(data = ipam_sum_tt,
+       aes(
+         x = as.Date(dt_posixct),
+         y = YII_MEAN,
+         color = Tank_treatment
+       )) +
+  geom_point(size = 4) +
+  geom_line(size = 2) +
+  geom_errorbar(aes(ymin = YII_MEAN - YII_se, 
+                    ymax = YII_MEAN + YII_se), width =
+                  .5) +
+  theme_bw(base_size = 19) +
+  scale_color_manual(values = c("blue2",
+                                "orangered2")) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "2 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-24"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-07"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-29"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-03"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  labs(x = "Date") + 
+  ylim(c(1,10))
+```
+
+  
+## 3a) IPAM YII split by tank treatments 
+  
+```{r IPAM tank treatments, echo=F, fig.width=10, fig.cap= "YII value from IPAM for genotypes split by tank treatment. Black solid vertical lines in all plots denotes entire heat ramping period (23rd July 2019 to 8th Aug 2019). Dashed vertical black lines show 5 day period when frags are at 30 degrees celcius (30th July 2019 to 5th August 2019)"}
+
+ggplot(data = ipam_sum_tt,
+       aes(
+         x = as.Date(dt_posixct),
+         y = YII_MEAN,
+         color = Tank_treatment
+       )) +
+  geom_point(size = 3) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = YII_MEAN - YII_se, 
+                    ymax = YII_MEAN + YII_se), width =
+                  .5) +
+  theme_bw() +
+  scale_color_manual(values = c("blue2",
+                                "orangered2")) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "2 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  ) + 
+  labs(title = "IPAM YII values",
+       x = "Date",
+       y = "YII value") + 
+  ylim(c(0,0.65))
+```  
+
+```{r FvFm, fig.width=10 , fig.height=4}
+ipam_sum_tt
+
+ggplot(data = ipam_sum_tt,
+       aes(
+         x = as.Date(dt_posixct),
+         y = FvFm_MEAN,
+         color = Tank_treatment
+       )) +
+  geom_point(size = 2) +
+  geom_line(aes(linetype = Tank_treatment),size = 1) +
+  geom_errorbar(aes(ymin = FvFm_MEAN - FvFm_se, 
+                    ymax = FvFm_MEAN + FvFm_se), 
+                width = .5) +
+  theme_bw(base_size = 15) +
+  scale_color_manual(values = c("blue2",
+                                "orangered2")) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "2 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-24"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-07"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-29"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-03"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  labs(x = "Date",
+       y = "Fv/Fm") + 
+  ylim(c(0,0.65))
+```
+
+
+  
+```{r IPAM tank treatments, echo=F, fig.width=10, fig.cap= "YII value from IPAM for genotypes split by tank treatment. Black solid vertical lines in all plots denotes entire heat ramping period (23rd July 2019 to 8th Aug 2019). Dashed vertical black lines show 5 day period when frags are at 30 degrees celcius (30th July 2019 to 5th August 2019)"}
+ggplot(data = ipam_sum,
+       aes(
+         x = as.Date(dt_posixct),
+         y = YII_MEAN,
+         color = Genotype,
+         group = geno_tank
+       )) +
+  geom_point() +
+  geom_line(aes(linetype = Tank_treatment)) +
+  geom_errorbar(aes(ymin = YII_MEAN - YII_se, ymax = YII_MEAN + YII_se), width =
+                  .1) +
+  theme_bw() +
+  facet_wrap( ~ Tank_treatment) +
+  scale_color_manual(values = c("steelblue2",
+                                "orange1",
+                                "limegreen",
+                                "darkorchid")) +
+  facet_wrap( ~ Tank_treatment) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  labs(title = "IPAM YII values",
+       x = "Date",
+       y = "YII value")
+```
+  
+\newpage
+## 3b) IPAM YII split by Genotype  
+  
+```{r IPAM Genotype, echo = F, fig.width=10, fig.heaight=3, fig.cap="YII value from IPAM for genotypes split by tank treatment. Black solid vertical lines in all plots denotes entire heat ramping period (23rd July 2019 to 8th Aug 2019). Dashed vertical black lines show 5 day period when frags are at 30 degrees celcius (30th July 2019 to 5th August 2019)"}
+ggplot(data = ipam_sum,
+       aes(
+         x = as.Date(dt_posixct),
+         y = YII_MEAN,
+         color = Genotype,
+         group = geno_tank
+       )) +
+  geom_point() +
+  geom_line(aes(linetype = Tank_treatment)) +
+  geom_errorbar(aes(ymin = YII_MEAN - YII_se, ymax = YII_MEAN + YII_se), width =
+                  .1) +
+  theme_bw() +
+  facet_wrap(~ Genotype) +
+  scale_x_date(
+    date_labels = "%d %b",
+    date_breaks = "4 day",
+    guide = guide_axis(n.dodge = 2),
+    limit = c(as.Date("2019-07-06"), as.Date("2019-08-08"))
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-23"),
+             size = 0.3) +
+  geom_vline(xintercept = as.Date("2019-08-08"),
+             size = 0.3) +
+  geom_vline(
+    xintercept = as.Date("2019-07-30"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = as.Date("2019-08-05"),
+    linetype = 2,
+    size = 0.3
+  ) +
+  labs(title = "IPAM YII values",
+       x = "Date",
+       y = "YII value")
+```
+
+```{r Stats on BW, include = T}
+IPAM_4_plotting %>% 
+  group_by(IPAM_round, Frag_number, Genotype, Tank_treatment) %>% 
+  summarise(mean = mean(FvFm)) -> IPAM_stats
+
+boxplot(mean ~ Tank_treatment, data = IPAM_stats)
+fit <- lm(mean ~ Tank_treatment, data = IPAM_stats)
+plot(fit)
+bartlett.test(mean ~ Tank_treatment, data = IPAM_stats)
+hist(resid(fit))
+
+IPAM_stats %>% 
+  mutate(log = log(mean), 
+         sqrt = sqrt(mean), 
+         rn = RankNorm(mean)) -> IPAM_stats
+
+boxplot(log ~ Tank_treatment, data = IPAM_stats)
+fit <- lm(log ~ Tank_treatment, data = IPAM_stats)
+plot(fit)
+bartlett.test(log ~ Tank_treatment, data = IPAM_stats)
+hist(resid(fit))
+plot(density(IPAM_stats$log))
+
+boxplot(sqrt ~ Tank_treatment, data = IPAM_stats)
+fit <- lm(sqrt ~ Tank_treatment, data = IPAM_stats)
+plot(fit)
+bartlett.test(sqrt ~ Tank_treatment, data = IPAM_stats)
+hist(resid(fit))
+plot(density(IPAM_stats$sqrt))
+
+
+
+mstand %>% 
+  mutate(prop_change = percentchange/100, # need proportion for arcsine to work
+         p_arcsine = asin(sqrt(prop_change)), #arcsine square root 
+         ROUND = as.factor(Round)) -> mstand
+
+boxplot(percentchange ~ Tank_treatment, data = mstand)
+fit <- lm(percentchange ~ Tank_treatment, data = mstand)
+plot(fit)
+bartlett.test(percentchange ~ Tank_treatment, data = mstand)
+hist(resid(fit))
+
+boxplot(p_arcsine ~ Tank_treatment, data = mstand)
+fit <- lm(p_arcsine ~ Tank_treatment, data = mstand)
+plot(fit)
+bartlett.test(p_arcsine ~ Tank_treatment, data = mstand)
+hist(resid(fit))
+
+bw_anova <- (aov(mass_standardised_sa_grams.cm.2 ~ Tank_treatment*ROUND, data = mstand))
+plot(bw_anova)
+summary(bw_anova)
+bw_tukey <- TukeyHSD(bw_anova)
+bw_tukey$`Tank_treatment:ROUND`
+
+bw_anova <- (aov(percentchange ~ Tank_treatment*ROUND, data = mstand))
+plot(bw_anova)
+summary(bw_anova)
+bw_tukey <- TukeyHSD(bw_anova)
+bw_tukey$`Tank_treatment:ROUND`
+
+bw_anova <- (aov(p_arcsine ~ Tank_treatment*ROUND, data = mstand))
+View(bw_anova$model)
+plot(bw_anova)
+summary(bw_anova)
+bw_tukey <- TukeyHSD(bw_anova)
+bw_tukey$`Tank_treatment:ROUND`
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
