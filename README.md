@@ -28,3 +28,5 @@ All programs used are in the RMarkdown in the transcriptomic directory.
   
   
 ## 16S rRNA Analysis  
+  
+I got lazy today I will finish this in a wee bit. 
