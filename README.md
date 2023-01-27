@@ -19,8 +19,8 @@ This includes all pre processing and analysis in RStudio
   
 ### RStudio Analysis  
 All programs used are in the RMarkdown in the transcriptomic directory.  
-- _DHE_gene_expression.Rmd_ all coral sample analysis  
-- _DHE_T_pe_and_di_split_analyses.Rmd_ pre-exposure and disease inoculated samples seperated
+- _DHE_gene_expression.Rmd_ - all coral sample analysis  
+- _DHE_T_pe_and_di_split_analyses.Rmd_ - pre-exposure and disease inoculated samples seperated
   
   
 ## 16S rRNA Analysis  
