@@ -1,8 +1,10 @@
 # Response of Acropora palmata to Different Disease Inoculations and Short Term Heat Stress  
 All scripts and pipelines for bioinformatic analyses of 3 prime RNA-seq, 16S rRNA, and physiological data for the manuscript "Different disease inoculations cause common responses of the host immune system and prokaryotic component of the microbiome in *Acropora palmata*"  
   
-All raw reads for omic analysis are available under NCBI project number *PRJNA895002* (N.B., waiting for succesful publication before becoming avaliable)
-
+All raw reads for omics analyses are available under NCBI project number **PRJNA895002** (N.B., waiting for successful publication before becoming available)  
+  
+For each rmarkdown, RData files are provided if people want to use them.  
+  
 ## Physiological Analysis  
 This includes the following  
 - Temperature (*temp_bw_ipam_analyses.Rmd*)
